@@ -45,6 +45,17 @@ const PRESETS = {
   "Dike (opening)": { strike: 0, dip: 90, rake: 0, depth: 3, length: 12, width: 6, slip: 0, open: 1.5 },
 };
 
+// Keep the fault buried: its top edge (centroid depth − sin(dip)·W/2) must stay
+// below the surface, else the Okada solution is singular right on the pixel grid
+// and the displacement mask can't fully clean the trace. A small margin (max of
+// 50 m or 2% of width) keeps the edge clear of that exact coincidence. Bumps the
+// centroid depth up whenever depth / dip / width would breach the surface.
+function constrainFault() {
+  const f = state.fault;
+  const minDepth = Math.sin(f.dip * DEG) * f.width / 2 + Math.max(0.05, 0.02 * f.width);
+  if (f.depth < minDepth) f.depth = minDepth;
+}
+
 // ---------------------------------------------------------------- WebGL2
 const canvas = document.getElementById("gl");
 const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
@@ -146,7 +157,7 @@ function requestRender() { if (!pending) { pending = true; requestAnimationFrame
 const refreshers = [];
 function refreshAll() { for (const r of refreshers) r(); }
 
-function addField(container, group, key, label, unit, min, max, persistent = true) {
+function addField(container, group, key, label, unit, min, max, persistent = true, onAfter = null) {
   const obj = group ? state[group] : state;
   const row = document.createElement("div");
   row.className = "row";
@@ -160,12 +171,14 @@ function addField(container, group, key, label, unit, min, max, persistent = tru
   const sync = () => { range.value = obj[key]; num.value = round2(obj[key]); };
   range.addEventListener("input", () => {
     obj[key] = clamp(+range.value, min, max); num.value = round2(obj[key]);
+    if (onAfter) onAfter();
     onChange();
   });
   num.addEventListener("input", () => {
     const v = +num.value;
     if (!Number.isFinite(v)) return;
     obj[key] = clamp(v, min, max); range.value = obj[key];
+    if (onAfter) onAfter();
     onChange();
   });
   sync();
@@ -180,20 +193,20 @@ function buildViewOpts() {
   if (state.view !== 0) addField(box, null, "ampCm", "Saturation", "cm", 1, 200, false);
 }
 
-// Generic labeled segmented (radio-style) control.
-function addSegmented(container, label, options, getCurrent, onSelect) {
-  const lab = document.createElement("div"); lab.className = "ctl-lab"; lab.textContent = label;
-  const seg = document.createElement("div"); seg.className = "seg";
-  const refresh = () => [...seg.children].forEach((c, i) =>
-    c.classList.toggle("active", options[i][0] === getCurrent()));
-  options.forEach(([val, text]) => {
-    const b = document.createElement("button");
-    b.textContent = text;
-    b.addEventListener("click", () => { onSelect(val); refresh(); });
-    seg.append(b);
+// Compact inline toggle: "Label  Opt1 Opt2" highlighted on a single line.
+function addInlineToggle(container, label, options, getCurrent, onSelect) {
+  const row = document.createElement("div"); row.className = "inline-row";
+  const lab = document.createElement("span"); lab.className = "ilab"; lab.textContent = label;
+  row.append(lab);
+  const opts = options.map(([val, text]) => {
+    const o = document.createElement("span"); o.className = "opt"; o.textContent = text;
+    o.addEventListener("click", () => { onSelect(val); refresh(); });
+    row.append(o);
+    return [o, val];
   });
+  const refresh = () => opts.forEach(([o, val]) => o.classList.toggle("active", val === getCurrent()));
   refresh();
-  container.append(lab, seg);
+  container.append(row);
 }
 
 // Derive heading/wavelength from the semantic pass/band choices.
@@ -205,13 +218,13 @@ function applyGeometry() {
 function buildInsar() {
   const box = document.getElementById("insar");
   box.textContent = "";
-  addSegmented(box, "Orbit pass", [["asc", "Ascending"], ["desc", "Descending"]],
+  addInlineToggle(box, "Orbit pass", [["asc", "Ascending"], ["desc", "Descending"]],
     () => state.insar.pass,
     (v) => { state.insar.pass = v; applyGeometry(); refreshAll(); onChange(); });
-  addSegmented(box, "Look direction", [["right", "Right"], ["left", "Left"]],
+  addInlineToggle(box, "Look", [["right", "Right"], ["left", "Left"]],
     () => state.insar.look,
     (v) => { state.insar.look = v; onChange(); });
-  addSegmented(box, "Radar band", [["X", "X"], ["C", "C"], ["S", "S"], ["L", "L"]],
+  addInlineToggle(box, "Band", [["X", "X"], ["C", "C"], ["S", "S"], ["L", "L"]],
     () => state.insar.band,
     (v) => { state.insar.band = v; applyGeometry(); refreshAll(); onChange(); });
   addField(box, "insar", "incidence", "Incidence", "°", 20, 50);
@@ -367,12 +380,16 @@ canvas.addEventListener("wheel", (e) => {
 
 // ------------------------------------------------------------- wiring
 const faultBox = document.getElementById("fault");
-for (const [k, label, unit, min, max] of FAULT_FIELDS) addField(faultBox, "fault", k, label, unit, min, max);
+const burialHook = () => { constrainFault(); refreshAll(); };
+for (const [k, label, unit, min, max] of FAULT_FIELDS) {
+  const coupled = k === "depth" || k === "dip" || k === "width";
+  addField(faultBox, "fault", k, label, unit, min, max, true, coupled ? burialHook : null);
+}
 const presetSel = document.getElementById("preset");
 for (const name of Object.keys(PRESETS)) presetSel.add(new Option(name, name));
 presetSel.addEventListener("change", () => {
   Object.assign(state.fault, PRESETS[presetSel.value]);
-  refreshAll(); onChange();
+  constrainFault(); refreshAll(); onChange();
 });
 
 document.getElementById("showfault").addEventListener("change", (e) => {
@@ -401,11 +418,12 @@ document.getElementById("aboutback").addEventListener("click", () => setAbout(fa
 
 window.addEventListener("resize", requestRender);
 window.addEventListener("hashchange", () => {
-  readUrl(); refreshAll(); buildInsar(); buildSegments(); buildViewOpts(); onChange();
+  readUrl(); constrainFault(); buildInsar(); refreshAll(); buildSegments(); buildViewOpts(); onChange();
 });
 
 // ------------------------------------------------------------- init
 readUrl();
+constrainFault();
 buildInsar();
 refreshAll();
 document.getElementById("showfault").checked = state.showFault;

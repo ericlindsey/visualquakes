@@ -169,6 +169,9 @@ Status keys: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [x] Mask the Okada surface-trace singularity: flag pixels with |disp| > 20 m
       (the `!(mag < T)` test also catches NaN/Inf) and paint them neutral gray.
       Two comparisons per pixel — no measurable cost.
+- [x] Keep the fault buried: enforce centroid `depth ≥ sin(dip)·W/2 + margin`
+      whenever depth/dip/width change, so the top edge never breaches the
+      surface (the residual singular case the mask alone could not clean).
 
 ### Step 6 — Interaction polish  `[~]`
 - [x] Live slider → uniform updates with `requestAnimationFrame` coalescing.
@@ -181,6 +184,8 @@ Status keys: `[ ]` todo · `[~]` in progress · `[x]` done.
       direction (right/left), radar band (X/C/S/L → wavelength), incidence
       slider, with an Advanced manual heading/λ override for unusual cases.
 - [x] In-header About panel describing how it works.
+- [x] Layout: colorbar + stats live in a compact lower-right info panel; InSAR
+      geometry uses single-line inline toggles to keep the main panel short.
 - [ ] Nice-to-have: keyboard nudges, mobile pinch-zoom, North arrow + scale bar.
 
 ### Step 7 — Ship on GitHub Pages  `[~]`
