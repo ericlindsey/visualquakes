@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>SimpleQuakes — interactive earthquake deformation</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000;
+    font: 13px/1.45 system-ui, -apple-system, sans-serif; color: #f0f0f2; }
+  #gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+    touch-action: none; cursor: grab; }
+  #gl.dragging { cursor: grabbing; }
+  #nogl { position: fixed; inset: 0; display: none; place-content: center;
+    text-align: center; padding: 2rem; }
+
+  .glass { background: rgba(18, 19, 24, 0.6);
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    backdrop-filter: blur(14px) saturate(1.3);
+    border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 14px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45); }
+
+  .panel { position: fixed; top: 12px; left: 12px; width: 312px;
+    max-height: calc(100vh - 24px); overflow-y: auto; padding: 12px 14px 14px; }
+  .phead { display: flex; align-items: center; justify-content: space-between; }
+  h1 { font-size: 14px; font-weight: 650; margin: 0; letter-spacing: 0.2px; }
+  h1 small { font-weight: 400; color: #9aa; margin-left: 6px; }
+  #collapse { background: none; border: 0; color: #ccd; font-size: 18px;
+    cursor: pointer; line-height: 1; padding: 0 4px; }
+
+  .group { margin-top: 12px; }
+  .gtitle { text-transform: uppercase; font-size: 10px; letter-spacing: 0.8px;
+    color: #8a90a0; margin-bottom: 5px; }
+  .row { display: grid; grid-template-columns: 56px 1fr 62px 20px; gap: 7px;
+    align-items: center; margin: 4px 0; }
+  .row label { color: #c7ccd8; white-space: nowrap; }
+  .row .unit { color: #767c8c; font-size: 11px; }
+  input[type=range] { width: 100%; accent-color: #4b8bff; margin: 0; }
+  input[type=number] { width: 100%; box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.32); border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #f0f0f2; border-radius: 6px; padding: 2px 5px; font: inherit;
+    -moz-appearance: textfield; appearance: textfield; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number]:focus { outline: 1px solid #4b8bff; border-color: #4b8bff; }
+
+  /* compact inline toggle: "Label  Opt1 Opt2" on one line */
+  .inline-row { display: flex; align-items: center; gap: 5px; margin: 5px 0; flex-wrap: wrap; }
+  .inline-row .ilab { color: #c7ccd8; flex: 1 1 auto; }
+  .inline-row .opt { padding: 2px 8px; border-radius: 6px; cursor: pointer;
+    color: #aeb6c6; border: 1px solid transparent; }
+  .inline-row .opt:hover { border-color: rgba(255, 255, 255, 0.2); }
+  .inline-row .opt.active { background: #2d6cdf; color: #fff; }
+
+  .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+  .seg button { flex: 1 1 auto; min-width: 48px; padding: 5px 6px;
+    background: rgba(255, 255, 255, 0.07); color: #d8dce6;
+    border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 7px;
+    cursor: pointer; font: inherit; }
+  .seg button.active { background: #2d6cdf; border-color: #4b8bff; color: #fff; }
+
+  select, .btn { width: 100%; box-sizing: border-box; margin-top: 6px;
+    background: rgba(0, 0, 0, 0.32); border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #f0f0f2; border-radius: 7px; padding: 5px 7px; font: inherit; cursor: pointer; }
+  .chk { display: flex; align-items: center; gap: 7px; margin-top: 8px; color: #c7ccd8; }
+  .chk input { accent-color: #4b8bff; }
+
+  details.adv { margin-top: 7px; }
+  details.adv summary { cursor: pointer; color: #9aa3b4; font-size: 11px; list-style: none; }
+  details.adv summary::-webkit-details-marker { display: none; }
+  details.adv summary::before { content: "▸ "; }
+  details.adv[open] summary::before { content: "▾ "; }
+
+  #aboutbox { display: none; margin-top: 10px; color: #d2d6e0; }
+  #aboutbox p { margin: 8px 0; }
+  #aboutbox code { background: rgba(255,255,255,0.08); padding: 0 4px; border-radius: 4px; }
+  #aboutlink { cursor: pointer; }
+  /* About swaps body<->aboutbox; collapse (declared last) wins over both. */
+  .panel.show-about #body { display: none; }
+  .panel.show-about #aboutbox { display: block; }
+  .panel.collapsed #body,
+  .panel.collapsed #aboutbox { display: none; }
+
+  /* lower-right info panel: colorbar + stats */
+  #infopanel { position: fixed; bottom: 12px; right: 12px; width: 250px;
+    padding: 10px 12px; }
+  #legbar { height: 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); }
+  #legtext { color: #aab; font-size: 11px; margin-top: 4px; }
+  #readout { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.78); font-size: 11px; font-variant-numeric: tabular-nums; }
+  #readout b { color: #fff; }
+
+  .hint { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.5); font-size: 11px; pointer-events: none;
+    background: rgba(0,0,0,0.25); padding: 3px 10px; border-radius: 20px; }
+  a { color: #6aa6ff; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="nogl">
+  <div>
+    <h1>WebGL2 is required</h1>
+    <p>SimpleQuakes runs the Okada deformation model in a WebGL2 fragment
+    shader. This browser/device does not expose WebGL2.</p>
+  </div>
+</div>
+
+<div class="panel glass" id="panel">
+  <div class="phead">
+    <h1>SimpleQuakes <small>Okada 1985 · <a id="aboutlink">about</a></small></h1>
+    <button id="collapse" title="Collapse / expand">–</button>
+  </div>
+  <div id="aboutbox">
+    <p>This page computes the surface deformation produced by a single
+    rectangular fault (a dislocation in an elastic half-space, <b>Okada 1985</b>)
+    and shows it the way a satellite radar would — as <b>InSAR fringes</b>.</p>
+    <p>The whole solution runs <b>per pixel on your GPU</b> in a WebGL2 fragment
+    shader, so moving a slider just updates a few numbers and the image redraws
+    in real time. Each color cycle in the default view is one fringe =
+    <code>λ/2</code> of motion toward/away from the satellite.</p>
+    <p>The fault's outline is drawn on the surface; the <b>white</b> edge marks
+    its top (shallowest) edge. The in-browser engine is validated against a
+    double-precision Python reference. Source &amp; details:
+    <a href="https://github.com/ericlindsey/SimpleQuakes" target="_blank" rel="noopener">github.com/ericlindsey/SimpleQuakes</a>.</p>
+    <p><a id="aboutback">← back to controls</a></p>
+  </div>
+  <div id="body">
+    <div class="group"><div class="gtitle">Fault</div><div id="fault"></div></div>
+    <div class="group"><div class="gtitle">InSAR geometry</div><div id="insar"></div></div>
+    <div class="group">
+      <div class="gtitle">View</div>
+      <div id="viewseg" class="seg"></div>
+      <div id="viewopts"></div>
+    </div>
+    <div class="group">
+      <div class="gtitle">Scenario</div>
+      <select id="preset"></select>
+      <label class="chk"><input type="checkbox" id="showfault" checked> Show fault outline</label>
+      <button class="btn" id="resetview">Reset view</button>
+    </div>
+  </div>
+</div>
+
+<div id="infopanel" class="glass">
+  <div id="legbar"></div>
+  <div id="legtext"></div>
+  <div id="readout"></div>
+</div>
+
+<div class="hint">drag to pan · scroll to zoom</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
