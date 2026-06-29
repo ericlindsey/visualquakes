@@ -14,8 +14,9 @@ const round2 = (v) => Math.round(v * 100) / 100;
 const state = {
   fault: { strike: 30, dip: 45, rake: 90, depth: 5, length: 10, width: 6, slip: 1, open: 0 },
   insar: { heading: -12, incidence: 34, wavelengthCm: 5.6, pass: "asc", look: "right", band: "C" },
-  view: 0,            // 0 fringes, 1 LOS, 2 East, 3 North, 4 Up
-  ampCm: 30,          // diverging-colormap saturation for amplitude views
+  quantity: 0,        // 0 displacement, 1 tilt, 2 strain
+  view: 0,            // index within the active quantity's view list
+  amp: [30, 50, 50],  // diverging-colormap saturation per quantity (see AMP_CFG)
   showFault: true,
   cam: { extent: 40, ox: 0, oy: 0 }, // half-height (km) and center offset (km)
 };
@@ -36,7 +37,22 @@ const PASS_HEADING = { asc: -12, desc: 168 };
 // Radar wavelength by band, cm.
 const BAND_WAVELENGTH_CM = { X: 3.1, C: 5.6, S: 9.4, L: 23.6 };
 
-const VIEW_NAMES = ["Fringes", "LOS", "East", "North", "Up"];
+// Displayable quantities and the view list each one offers. Tilt/strain have no
+// wrapped-fringe mode, so they use the diverging colormap for every view.
+const QUANTITIES = ["Displacement", "Tilt", "Strain"];
+const VIEWS = [
+  ["Fringes", "LOS", "East", "North", "Up"],
+  ["East", "North"],                 // tilt: uze, uzn
+  ["Eee", "Enn", "Ene", "Areal"],    // strain: uee, unn, shear, dilatation
+];
+// Saturation control per quantity: display unit, slider range, and the factor
+// that maps the slider value into the shader's raw units (km for displacement,
+// dimensionless for tilt/strain). 1 microradian == 1 microstrain == 1e-6.
+const AMP_CFG = [
+  { unit: "cm", min: 1, max: 200, scale: 1e-5 },     // cm -> km
+  { unit: "µrad", min: 1, max: 500, scale: 1e-6 },   // microradian -> radian
+  { unit: "µε", min: 1, max: 500, scale: 1e-6 },     // microstrain
+];
 const PRESETS = {
   "Shallow dip-slip": { strike: 30, dip: 45, rake: 90, depth: 5, length: 10, width: 6, slip: 1, open: 0 },
   "Strike-slip M7": { strike: 0, dip: 90, rake: 0, depth: 7, length: 60, width: 14, slip: 2, open: 0 },
@@ -139,8 +155,10 @@ function render() {
   gl.uniform3f(uniformName("u_look"), look[0], look[1], look[2]);
   gl.uniform1f(uniformName("u_fringe"), state.insar.wavelengthCm / 200000); // km/fringe
   gl.uniform1i(uniformName("u_mode"), 0);
+  gl.uniform1i(uniformName("u_quantity"), state.quantity);
   gl.uniform1i(uniformName("u_view"), state.view);
-  gl.uniform1f(uniformName("u_ampScale"), state.ampCm / 100000); // cm -> km
+  const ampCfg = AMP_CFG[state.quantity];
+  gl.uniform1f(uniformName("u_ampScale"), state.amp[state.quantity] * ampCfg.scale);
   gl.uniform1i(uniformName("u_showFault"), state.showFault ? 1 : 0);
   gl.uniform2f(uniformName("u_c0"), corners[0][0], corners[0][1]);
   gl.uniform2f(uniformName("u_c1"), corners[1][0], corners[1][1]);
@@ -209,7 +227,27 @@ function addField(container, group, key, label, unit, min, max, persistent = tru
 function buildViewOpts() {
   const box = document.getElementById("viewopts");
   box.textContent = "";
-  if (state.view !== 0) addField(box, null, "ampCm", "Saturation", "cm", 1, 200, false);
+  // Only the wrapped-fringe view (displacement, view 0) has no saturation knob.
+  if (state.quantity === 0 && state.view === 0) return;
+  const cfg = AMP_CFG[state.quantity];
+  addField(box, "amp", String(state.quantity), "Saturation", cfg.unit, cfg.min, cfg.max, false);
+}
+
+// Quantity toggle: Displacement / Tilt / Strain. Switching resets to the first
+// view of the new quantity and rebuilds the view segments below it.
+function buildQuantity() {
+  const box = document.getElementById("quantsel");
+  box.textContent = "";
+  addInlineToggle(box, "Quantity", QUANTITIES.map((q, i) => [i, q]),
+    () => state.quantity,
+    (v) => {
+      if (v === state.quantity) return;
+      state.quantity = v;
+      state.view = 0;
+      buildSegments();
+      buildViewOpts();
+      onChange();
+    });
 }
 
 // Compact inline toggle: "Label  Opt1 Opt2" highlighted on a single line.
@@ -258,7 +296,7 @@ function buildInsar() {
 function buildSegments() {
   const seg = document.getElementById("viewseg");
   seg.textContent = "";
-  VIEW_NAMES.forEach((name, i) => {
+  VIEWS[state.quantity].forEach((name, i) => {
     const b = document.createElement("button");
     b.textContent = name;
     b.classList.toggle("active", state.view === i);
@@ -286,23 +324,28 @@ function divergingJS(x) {
 }
 const rgb = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
 
+const QUANTITY_NOUN = ["displacement", "tilt", "strain"];
+
 function updateLegend() {
   const bar = document.getElementById("legbar");
   const text = document.getElementById("legtext");
+  const isFringe = state.quantity === 0 && state.view === 0;
   const stops = [];
   for (let i = 0; i <= 20; i++) {
     const t = i / 20;
-    const c = state.view === 0 ? fringeColorJS(t) : divergingJS(t * 2 - 1);
+    const c = isFringe ? fringeColorJS(t) : divergingJS(t * 2 - 1);
     stops.push(`${rgb(c)} ${(t * 100).toFixed(0)}%`);
   }
   bar.style.background = `linear-gradient(90deg, ${stops.join(",")})`;
-  if (state.view === 0) {
+  if (isFringe) {
     text.textContent = `Wrapped interferogram · 1 color cycle = λ/2 = `
       + `${(state.insar.wavelengthCm / 2).toFixed(2)} cm of range change`;
   } else {
-    const amp = (+state.ampCm).toFixed(2);
-    text.textContent = `${VIEW_NAMES[state.view]} displacement · `
-      + `blue −${amp} cm → red +${amp} cm`;
+    const cfg = AMP_CFG[state.quantity];
+    const amp = (+state.amp[state.quantity]).toFixed(state.quantity === 0 ? 2 : 0);
+    const name = VIEWS[state.quantity][state.view];
+    text.textContent = `${name} ${QUANTITY_NOUN[state.quantity]} · `
+      + `blue −${amp} ${cfg.unit} → red +${amp} ${cfg.unit}`;
   }
 }
 
@@ -337,7 +380,9 @@ function writeUrl() {
   for (const k of Object.keys(f)) p.set(k, round2(f[k]));
   p.set("hd", round2(i.heading)); p.set("inc", round2(i.incidence)); p.set("wl", round2(i.wavelengthCm));
   p.set("pass", i.pass); p.set("look", i.look); p.set("band", i.band);
-  p.set("view", state.view); p.set("amp", round2(state.ampCm)); p.set("fl", state.showFault ? 1 : 0);
+  p.set("qty", state.quantity); p.set("view", state.view);
+  p.set("amp", round2(state.amp[0])); p.set("ampt", round2(state.amp[1]));
+  p.set("amps", round2(state.amp[2])); p.set("fl", state.showFault ? 1 : 0);
   p.set("ext", round2(c.extent)); p.set("ox", round2(c.ox)); p.set("oy", round2(c.oy));
   history.replaceState(null, "", "#" + p.toString());
 }
@@ -353,8 +398,11 @@ function readUrl() {
   if (p.has("pass")) state.insar.pass = p.get("pass");
   if (p.has("look")) state.insar.look = p.get("look");
   if (p.has("band")) state.insar.band = p.get("band");
-  state.view = clamp(Math.round(num("view", state.view)), 0, 4);
-  state.ampCm = num("amp", state.ampCm);
+  state.quantity = clamp(Math.round(num("qty", state.quantity)), 0, VIEWS.length - 1);
+  state.view = clamp(Math.round(num("view", state.view)), 0, VIEWS[state.quantity].length - 1);
+  state.amp[0] = num("amp", state.amp[0]);
+  state.amp[1] = num("ampt", state.amp[1]);
+  state.amp[2] = num("amps", state.amp[2]);
   state.showFault = num("fl", 1) !== 0;
   state.cam.extent = num("ext", state.cam.extent);
   state.cam.ox = num("ox", state.cam.ox);
@@ -483,12 +531,18 @@ document.getElementById("aboutback").addEventListener("click", () => setAbout(fa
 
 // On phones, move the info panel (colorbar + stats) inside the main control
 // panel so the two glass panes merge into one scrollable bottom sheet instead
-// of overlapping. On wider screens it lives free-floating at lower-right.
+// of overlapping. It sits at the top of the panel -- above the sliders -- so the
+// legend and readout stay visible without scrolling. On wider screens it lives
+// free-floating at lower-right.
 const infoPanel = document.getElementById("infopanel");
 const mobileMq = window.matchMedia("(max-width: 640px)");
 function applyLayout() {
-  if (mobileMq.matches) document.getElementById("panel").append(infoPanel);
-  else document.body.append(infoPanel);
+  if (mobileMq.matches) {
+    const panel = document.getElementById("panel");
+    panel.insertBefore(infoPanel, document.getElementById("body"));
+  } else {
+    document.body.append(infoPanel);
+  }
   requestRender(); // scale-bar width depends on the canvas height, which shifts
 }
 mobileMq.addEventListener("change", applyLayout);
@@ -496,7 +550,8 @@ applyLayout();
 
 window.addEventListener("resize", requestRender);
 window.addEventListener("hashchange", () => {
-  readUrl(); constrainFault(); buildInsar(); refreshAll(); buildSegments(); buildViewOpts(); onChange();
+  readUrl(); constrainFault(); buildInsar(); refreshAll();
+  buildQuantity(); buildSegments(); buildViewOpts(); onChange();
 });
 
 // ------------------------------------------------------------- init
@@ -505,6 +560,7 @@ constrainFault();
 buildInsar();
 refreshAll();
 document.getElementById("showfault").checked = state.showFault;
+buildQuantity();
 buildSegments();
 buildViewOpts();
 updateLegend();

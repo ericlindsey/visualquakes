@@ -113,8 +113,10 @@
     .panel { top: auto; bottom: 0; left: 0; right: 0; width: auto;
       max-height: 36vh; border-radius: 14px 14px 0 0;
       padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
-    #infopanel { position: static; width: auto; margin-top: 14px;
-      padding: 12px 0 0; background: none; border: 0; border-top: 1px solid
+    /* Sits at the top of the bottom-sheet panel (above the sliders); separate it
+       from the controls below with a bottom border instead of a top one. */
+    #infopanel { position: static; width: auto; margin-bottom: 12px;
+      padding: 0 0 12px; background: none; border: 0; border-bottom: 1px solid
       rgba(255, 255, 255, 0.12); border-radius: 0; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }
     .hint { display: none; }
@@ -156,6 +158,7 @@
     <div class="group"><div class="gtitle">InSAR geometry</div><div id="insar"></div></div>
     <div class="group">
       <div class="gtitle">View</div>
+      <div id="quantsel"></div>
       <div id="viewseg" class="seg"></div>
       <div id="viewopts"></div>
     </div>

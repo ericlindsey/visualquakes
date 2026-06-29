@@ -62,27 +62,39 @@ def main() -> None:
     p = PARAMS
     coords = np.linspace(-p["extent_km"], p["extent_km"], GRID_N)
     e, n = np.meshgrid(coords, coords)
-    ue, un, uz = okada85.displacement(
+    args = (
         e, n, p["depth"], p["strike"], p["dip"], p["L"], p["W"],
         p["rake"], p["slip"], p["open"], p["nu"],
     )
+    ue, un, uz = okada85.displacement(*args)
+    uze, uzn = okada85.tilt(*args)
+    unn, une, uen, uee = okada85.strain(*args)
     look = los_unit_vector(p["insar_heading_deg"], p["insar_incidence_deg"])
     los = ue * look[0] + un * look[1] + uz * look[2]
 
+    flat = lambda a: a.ravel(order="C").tolist()
     out = {
         "params": p,
         "look_enu": look.tolist(),
         "grid_n": GRID_N,
         "coords_km": coords.tolist(),
-        "ue": ue.ravel(order="C").tolist(),
-        "un": un.ravel(order="C").tolist(),
-        "uz": uz.ravel(order="C").tolist(),
-        "los": los.ravel(order="C").tolist(),
+        "ue": flat(ue),
+        "un": flat(un),
+        "uz": flat(uz),
+        "los": flat(los),
+        "uze": flat(uze),
+        "uzn": flat(uzn),
+        "unn": flat(unn),
+        "une": flat(une),
+        "uen": flat(uen),
+        "uee": flat(uee),
     }
     dest = Path(__file__).parent / "reference.json"
     dest.write_text(json.dumps(out))
     print(f"wrote {dest} ({dest.stat().st_size} bytes), grid {GRID_N}x{GRID_N}")
     print(f"los range change: min={los.min():.3e} max={los.max():.3e} km")
+    print(f"tilt max |uze|={np.abs(uze).max():.3e} |uzn|={np.abs(uzn).max():.3e} rad")
+    print(f"strain max |uee|={np.abs(uee).max():.3e} |unn|={np.abs(unn).max():.3e}")
 
 
 if __name__ == "__main__":
