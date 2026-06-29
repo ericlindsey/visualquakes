@@ -25,13 +25,16 @@ The interactive site is built and validated. In short:
   checked against the float64 oracle via the `web/bench/` harness.
 - **The app** (`web/index.html` + `web/app.js`, zero-build ES modules sharing
   `web/okada-shader.js`): full-window canvas; continuous sliders with
-  exact-entry number boxes for the fault + InSAR geometry; wrapped-fringe / LOS /
-  E / N / Up views with adjustable saturation; semantic InSAR geometry (orbit
-  pass, look direction, radar band, incidence, with an Advanced manual heading/λ
-  override); pan, wheel-zoom, and **pinch-zoom**; fault-outline overlay with
-  surface-trace singularity masking and a buried-fault constraint; colorbar
-  legend, Mw readout, **scale bar**, presets, an About panel, and shareable URL
-  state. Mobile layout collapses to a single scrollable bottom-sheet panel.
+  exact-entry number boxes for the fault + InSAR geometry; a Quantity toggle
+  (displacement / tilt / strain) selecting wrapped-fringe / LOS / E / N / Up
+  (displacement), East/North (tilt), or Eee/Enn/Ene/Areal (strain) views with
+  adjustable saturation; semantic InSAR geometry (orbit pass, look direction,
+  radar band, incidence, with an Advanced manual heading/λ override); pan,
+  wheel-zoom, and **pinch-zoom**; fault-outline overlay with surface-trace
+  singularity masking and a buried-fault constraint; colorbar legend, Mw
+  readout, **scale bar**, presets, an About panel, and shareable URL state.
+  Mobile layout collapses to a single scrollable bottom-sheet panel with the
+  legend + readout pinned at the top, above the sliders.
 - **Deploy.** A GitHub Actions workflow (`.github/workflows/static.yml`)
   publishes `web/` as the site root on push to `main`.
 
@@ -59,10 +62,15 @@ Status keys: `[ ]` todo · `[~]` in progress · `[x]` done.
       sliders so the user lands on a plausible scenario for a real earthquake.
       Network fetch only — keep the site static (no backend).
 
-### tilt / strain `[ ]`
-- [ ] Port `okada85.tilt` and `okada85.strain` to JS (validate vs the Python
-      reference) and to GLSL, and surface them as additional view modes if the
-      app exposes them.
+### tilt / strain `[x]`
+- [x] Port `okada85.tilt` and `okada85.strain` to JS (`web/bench/okada85.mjs`,
+      validated vs the Python reference to ~4e-20 by `validate.mjs`) and to GLSL
+      (`web/okada-shader.js`; the float64 mirror in `check-shader-algo.mjs`
+      matches the reference, and the on-GPU fp32 output agrees to ~1e-6).
+- [x] Surfaced as view modes: a Quantity toggle (Displacement / Tilt / Strain)
+      drives the View segments — tilt shows East/North (uze, uzn); strain shows
+      Eee, Enn, Ene (shear) and Areal (dilatation). Saturation switches units
+      (cm / microradian / microstrain) and all of it round-trips through the URL.
 
 ### Other extensions `[ ]`
 - [ ] GNSS-style displacement vector arrows overlaid on fringes.

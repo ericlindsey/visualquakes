@@ -51,13 +51,13 @@ instead of GPU execution — now fixed; re-run for honest per-frame GPU time.
 
 | File | Role |
 |------|------|
-| `../okada-shader.js` | GLSL ES 3.00 port of `displacement` + LOS + colormaps (shared with the app) |
-| `okada85.mjs` | float64 JS port (CPU baseline **and** correctness oracle) |
+| `../okada-shader.js` | GLSL ES 3.00 port of `displacement` / `tilt` / `strain` + LOS + colormaps (shared with the app) |
+| `okada85.mjs` | float64 JS port of `displacement` / `tilt` / `strain` (CPU baseline **and** correctness oracle) |
 | `okada-bench.html` | WebGL2 harness: live view, benchmark, validation |
 | `gen_reference.py` | writes `reference.json` from the Python float64 engine |
-| `reference.json` | ground-truth fixture (params + displacement + LOS on a grid) |
-| `validate.mjs` | Node: JS port vs Python reference |
-| `check-shader-algo.mjs` | Node: shader's restructured algebra vs reference |
+| `reference.json` | ground-truth fixture (params + displacement, LOS, tilt, strain on a grid) |
+| `validate.mjs` | Node: JS port vs Python reference (displacement, tilt, strain) |
+| `check-shader-algo.mjs` | Node: shader's restructured algebra vs reference (displacement, tilt, strain) |
 
 ## Trust chain (the parts checkable without a GPU)
 
@@ -66,9 +66,11 @@ node web/bench/validate.mjs           # JS float64  vs Python float64
 node web/bench/check-shader-algo.mjs  # shader algebra (float64) vs Python
 ```
 
-Both pass to ~1e-19 km (float64 round-off), so the shader's math is correct by
-construction. The browser **Validate** button adds the only device-dependent
-piece: fp32 vs float64 on your GPU.
+Both pass to float64 round-off (~1e-19 km for displacement, ~4e-20 for tilt and
+strain), so the shader's math is correct by construction. The browser
+**Validate** button adds the only device-dependent piece: fp32 vs float64 on
+your GPU (the displacement/LOS path; tilt and strain share the same kernel
+family and fp32 behavior).
 
 ## Regenerate the fixture
 
