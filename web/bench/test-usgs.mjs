@@ -1,10 +1,11 @@
 // Unit tests for the USGS import logic in web/usgs.js (scaling relations,
-// free-surface handling, ComCat parsing). Network-free.
+// free-surface handling, ComCat parsing, and fetch error paths via a stubbed
+// global fetch). The real network is never touched.
 //   node web/bench/test-usgs.mjs
 
 import {
   classifyMechanism, scaledDimensions, moment, faultFromMechanism,
-  extractEventId, parseEventFeature,
+  extractEventId, parseEventFeature, fetchUsgsEvent,
 } from "../usgs.js";
 
 // Mirror app.js FAULT_FIELDS ranges.
@@ -147,6 +148,54 @@ const mtProps = {
   try { parseEventFeature(feature({ origin: [{ properties: {} }] })); }
   catch (e) { msg = e.message; }
   check("parse: no mechanism throws", msg.includes("No focal mechanism"), msg);
+}
+
+// ---- fetch error paths (fetchUsgsEvent) ------------------------------------
+// These cover the live-site failure modes the pure logic can't: a stalled
+// request, a network/CORS rejection, an HTTP 404, and a 200 with no mechanism.
+// globalThis.fetch is stubbed; the real network is never touched.
+async function expectReject(name, promise, includes) {
+  try { await promise; check(name, false, "expected rejection"); }
+  catch (e) { check(name, e.message.includes(includes), e.message); }
+}
+{
+  const realFetch = globalThis.fetch;
+
+  // A request that never resolves but honors the abort signal -> timeout msg.
+  globalThis.fetch = (_url, opts) => new Promise((_res, rej) => {
+    opts?.signal?.addEventListener("abort",
+      () => rej(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  });
+  await expectReject("fetch: timeout message",
+    fetchUsgsEvent("ci38457511", 20), "timed out");
+
+  // A rejected fetch (CORS/network) -> reachability message, not "not found".
+  globalThis.fetch = () => Promise.reject(new TypeError("Failed to fetch"));
+  await expectReject("fetch: network/CORS message",
+    fetchUsgsEvent("ci38457511"), "Could not reach");
+
+  // HTTP 404 -> not-found message.
+  globalThis.fetch = () => Promise.resolve({ ok: false, status: 404 });
+  await expectReject("fetch: 404 not found",
+    fetchUsgsEvent("bogus1234"), "was not found");
+
+  // HTTP 200 but no mechanism -> parse error propagates.
+  globalThis.fetch = () => Promise.resolve({
+    ok: true, status: 200,
+    json: async () => feature({ origin: [{ properties: {} }] }),
+  });
+  await expectReject("fetch: 200 no mechanism",
+    fetchUsgsEvent("ci00000000"), "No focal mechanism");
+
+  // HTTP 200 with a moment tensor -> resolves to a parsed event.
+  globalThis.fetch = () => Promise.resolve({
+    ok: true, status: 200,
+    json: async () => feature({ "moment-tensor": [{ properties: mtProps }] }),
+  });
+  const ev = await fetchUsgsEvent("ci38457511");
+  check("fetch: 200 success parses", ev.mw === 7.05 && ev.planes[0].strike === 322);
+
+  globalThis.fetch = realFetch;
 }
 
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1); }

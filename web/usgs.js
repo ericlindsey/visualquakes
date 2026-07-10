@@ -138,25 +138,32 @@ export function parseEventFeature(geo) {
 
 const DETAIL_URL = (id) =>
   `https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/${encodeURIComponent(id)}.geojson`;
-const FDSN_URL = (id) =>
-  `https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=${encodeURIComponent(id)}&format=geojson`;
 
-// Fetch an event by ID. Tries the realtime detail feed first, then the FDSN
-// event service (which also resolves alias/merged event IDs).
-export async function fetchUsgsEvent(id) {
-  let lastStatus = 0;
-  for (const url of [DETAIL_URL(id), FDSN_URL(id)]) {
-    let resp;
-    try {
-      resp = await fetch(url);
-    } catch {
-      throw new Error("Could not reach the USGS API — check your connection.");
-    }
-    if (resp.ok) return parseEventFeature(await resp.json());
-    lastStatus = resp.status;
+// Fetch an event by ComCat ID from the realtime detail feed. This is the only
+// endpoint that carries the moment-tensor / focal-mechanism products (the FDSN
+// summary GeoJSON does not), and it resolves an event's associated/alias IDs
+// server-side, so one request suffices. The feed is CORS-enabled
+// (Access-Control-Allow-Origin: *), so it works from a static page.
+//
+// A hard timeout via AbortController turns a stalled request into a visible
+// error instead of leaving the UI stuck on "Looking up event...". A rejected
+// fetch is a network failure or a CORS block, not a bad ID -- say so plainly.
+export async function fetchUsgsEvent(id, timeoutMs = 12000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let resp;
+  try {
+    resp = await fetch(DETAIL_URL(id), { signal: ctrl.signal });
+  } catch (err) {
+    throw new Error(err?.name === "AbortError"
+      ? "The USGS request timed out — check your connection and try again."
+      : "Could not reach the USGS API (network error or blocked by the browser).");
+  } finally {
+    clearTimeout(timer);
   }
-  if (lastStatus === 404 || lastStatus === 400) {
+  if (resp.status === 404 || resp.status === 400) {
     throw new Error(`Event “${id}” was not found — check the ID.`);
   }
-  throw new Error(`USGS API error (HTTP ${lastStatus}).`);
+  if (!resp.ok) throw new Error(`USGS API error (HTTP ${resp.status}).`);
+  return parseEventFeature(await resp.json());
 }
