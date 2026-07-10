@@ -33,8 +33,12 @@ The interactive site is built and validated. In short:
   wheel-zoom, and **pinch-zoom**; fault-outline overlay with surface-trace
   singularity masking and a buried-fault constraint; colorbar legend, Mw
   readout, **scale bar**, presets, an About panel, and shareable URL state.
-  Mobile layout collapses to a single scrollable bottom-sheet panel with the
-  legend + readout pinned at the top, above the sliders.
+  The view auto-frames on the **fault trace** (top-edge midpoint) centered in the
+  non-panel area of the window — a plain pan on load, and a zoom-to-fit when a
+  scenario/USGS event is loaded so a large rupture fits with margin; **Reset
+  view** restores all defaults and clears the URL. Mobile layout collapses to a
+  single scrollable bottom-sheet panel with the legend + readout pinned at the
+  top, above the sliders.
 - **Deploy.** A GitHub Actions workflow (`.github/workflows/static.yml`)
   publishes `web/` as the site root on push to `main`.
 
