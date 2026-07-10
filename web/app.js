@@ -69,11 +69,12 @@ const PRESETS = {
 
 // Keep the fault buried: its top edge (centroid depth − sin(dip)·W/2) must stay
 // below the surface, else the Okada solution is singular right on the pixel grid
-// and the displacement mask can't fully clean the trace. SURFACE_MARGIN is just
-// large enough (~1 px at the default ±40 km view) to push the singular edge off
-// the surface without visibly burying the fault. Bumps the centroid depth up
-// whenever depth / dip / width would breach the surface.
-const SURFACE_MARGIN = 0.05; // km
+// and the displacement mask can't fully clean the trace. SURFACE_MARGIN just
+// nudges the singular edge off the surface; kept small (10 m) so a fault that
+// wants to reach the surface stays nearly there, preserving the accuracy of the
+// large near-fault displacement instead of visibly burying it. Bumps the
+// centroid depth up whenever depth / dip / width would breach the surface.
+const SURFACE_MARGIN = 0.01; // km
 function constrainFault() {
   const f = state.fault;
   const minDepth = Math.sin(f.dip * DEG) * f.width / 2 + SURFACE_MARGIN;

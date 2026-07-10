@@ -12,7 +12,7 @@ const LIMITS = {
   strike: [0, 360], dip: [1, 90], rake: [-180, 180], depth: [0.2, 40],
   length: [0.5, 80], width: [0.5, 50], slip: [0, 15],
 };
-const MARGIN = 0.05;
+const MARGIN = 0.01; // mirror app.js SURFACE_MARGIN
 
 let failures = 0;
 function check(name, cond, detail = "") {
