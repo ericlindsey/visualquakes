@@ -4,6 +4,7 @@
 // lives in the fragment shader; here we only push uniforms and redraw.
 
 import { VERT_SRC, FRAG_SRC } from "./okada-shader.js";
+import { fetchUsgsEvent, faultFromMechanism, extractEventId } from "./usgs.js";
 
 const DEG = Math.PI / 180;
 const TAU = 6.283185307179586;
@@ -31,6 +32,11 @@ const FAULT_FIELDS = [
   ["slip", "Slip", "m", 0, 15],
   ["open", "Opening", "m", 0, 10],
 ];
+
+// Field name -> [min, max], for code that sets fault params programmatically
+// (USGS import) and must respect the slider ranges.
+const FAULT_LIMITS = Object.fromEntries(
+  FAULT_FIELDS.map(([k, , , min, max]) => [k, [min, max]]));
 
 // Satellite heading by orbit pass (Sentinel-1-like, deg from north).
 const PASS_HEADING = { asc: -12, desc: 168 };
@@ -505,6 +511,63 @@ presetSel.addEventListener("change", () => {
   Object.assign(state.fault, PRESETS[presetSel.value]);
   constrainFault(); refreshAll(); onChange();
 });
+
+// -------------------------------------------------------- USGS event import
+// Load a real event by ComCat ID: strike/dip/rake from a nodal plane of its
+// focal mechanism (NP1/NP2 selectable), length/width from Wells & Coppersmith
+// scaling for the mechanism type, slip from the seismic moment. usgs.js keeps
+// the rupture below the free surface by trading width for length.
+let usgsEvent = null; // last loaded event ({title, mw, depthKm, planes})
+let usgsPlane = 0;    // selected nodal-plane index (0 = NP1)
+
+const usgsMsg = document.getElementById("usgsmsg");
+function setUsgsMsg(text, isError = false) {
+  usgsMsg.textContent = text;
+  usgsMsg.classList.toggle("err", isError);
+}
+
+function buildPlaneToggle() {
+  const box = document.getElementById("usgsplane");
+  box.textContent = "";
+  if (!usgsEvent) return;
+  addInlineToggle(box, "Nodal plane", [[0, "NP1"], [1, "NP2"]],
+    () => usgsPlane,
+    (v) => { usgsPlane = v; applyUsgsPlane(); });
+}
+
+function applyUsgsPlane() {
+  const { fault, notes } = faultFromMechanism(
+    usgsEvent.planes[usgsPlane], usgsEvent.mw, usgsEvent.depthKm,
+    FAULT_LIMITS, SURFACE_MARGIN);
+  Object.assign(state.fault, fault);
+  constrainFault(); refreshAll(); onChange();
+  setUsgsMsg(`${usgsEvent.title} · Mw ${usgsEvent.mw.toFixed(1)}, `
+    + `depth ${usgsEvent.depthKm.toFixed(0)} km`
+    + (notes.length ? ` · ${notes.join("; ")}` : ""));
+}
+
+const usgsInput = document.getElementById("usgsid");
+const usgsButton = document.getElementById("usgsload");
+async function loadUsgsEvent() {
+  const id = extractEventId(usgsInput.value);
+  if (!id) { setUsgsMsg("Paste a USGS event ID or event-page URL.", true); return; }
+  usgsButton.disabled = true;
+  setUsgsMsg("Looking up event…");
+  try {
+    usgsEvent = await fetchUsgsEvent(id);
+    usgsPlane = 0;
+    buildPlaneToggle();
+    applyUsgsPlane();
+  } catch (err) {
+    usgsEvent = null;
+    buildPlaneToggle();
+    setUsgsMsg(err.message, true);
+  } finally {
+    usgsButton.disabled = false;
+  }
+}
+usgsButton.addEventListener("click", loadUsgsEvent);
+usgsInput.addEventListener("keydown", (e) => { if (e.key === "Enter") loadUsgsEvent(); });
 
 document.getElementById("showfault").addEventListener("change", (e) => {
   state.showFault = e.target.checked; onChange();

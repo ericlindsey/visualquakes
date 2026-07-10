@@ -58,6 +58,7 @@ instead of GPU execution — now fixed; re-run for honest per-frame GPU time.
 | `reference.json` | ground-truth fixture (params + displacement, LOS, tilt, strain on a grid) |
 | `validate.mjs` | Node: JS port vs Python reference (displacement, tilt, strain) |
 | `check-shader-algo.mjs` | Node: shader's restructured algebra vs reference (displacement, tilt, strain) |
+| `test-usgs.mjs` | Node: USGS import logic (`../usgs.js` scaling relations, free-surface handling, ComCat parsing), network-free |
 
 ## Trust chain (the parts checkable without a GPU)
 

@@ -62,7 +62,8 @@ uv run pytest        # 45 tests validating the Okada85 reference
 
 ## AI co-authorship
 
-This repository is developed with the assistance of Claude (Opus 4.8). The
+This repository is developed with the assistance of Claude (Opus 4.8; USGS
+event import by Claude Fable 5). The
 Okada85 reference and its tests originate from the `geodef` project. Keep this
 note current when future AI models make material contributions.
 
