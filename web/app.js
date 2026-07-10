@@ -12,7 +12,9 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const round2 = (v) => Math.round(v * 100) / 100;
 
 // ---------------------------------------------------------------- state
-const state = {
+// The pristine defaults; `state` is a fresh clone so "Reset view" can restore
+// every field to these values (see resetAll).
+const DEFAULTS = {
   fault: { strike: 30, dip: 45, rake: 90, depth: 5, length: 10, width: 6, slip: 1, open: 0 },
   insar: { heading: -12, incidence: 34, wavelengthCm: 5.6, pass: "asc", look: "right", band: "C" },
   quantity: 0,        // 0 displacement, 1 tilt, 2 strain
@@ -21,6 +23,7 @@ const state = {
   showFault: true,
   cam: { extent: 40, ox: 0, oy: 0 }, // half-height (km) and center offset (km)
 };
+const state = structuredClone(DEFAULTS);
 
 const FAULT_FIELDS = [
   ["strike", "Strike", "°", 0, 360],
@@ -126,6 +129,70 @@ function faultCorners() {
   const corner = (l, w) => [l * sp + w * cd * cp, l * cp - w * cd * sp];
   return [corner(-L / 2, -W / 2), corner(L / 2, -W / 2),
           corner(L / 2, W / 2), corner(-L / 2, W / 2)];
+}
+
+// ----------------------------------------------------------- view framing
+// Surface projection of the fault-trace midpoint: the middle of the top
+// (shallow, white) edge, in km from the centroid. This -- not the centroid --
+// is what we frame the view on, since the trace is the eye-catching feature and
+// the centroid can sit well off to the side for a shallow, wide fault.
+function traceCenter() {
+  const c = faultCorners();
+  return [(c[0][0] + c[1][0]) / 2, (c[0][1] + c[1][1]) / 2];
+}
+
+// The non-panel region of the window (CSS px) plus the anchor point within it
+// where we want the trace to sit. Desktop: the control panel hugs the top-left,
+// so the usable space is to its right -- centering there shifts the quake right.
+// Mobile: the panel is a bottom sheet, so the usable space is above it -- center
+// high, nudged a touch right of middle to clear the top-left scale bar.
+function usableAnchor() {
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  const r = panelEl.getBoundingClientRect();
+  let x0 = 0, y0 = 0, x1 = W, y1 = H;
+  if (mobileMq.matches) y1 = clamp(r.top, 1, H);
+  else x0 = clamp(r.right, 0, W - 1);
+  let ax = (x0 + x1) / 2;
+  const ay = (y0 + y1) / 2;
+  if (mobileMq.matches) ax += (x1 - x0) * 0.06;
+  return { ax, ay, x0, y0, x1, y1 };
+}
+
+// Pan (leaving zoom unchanged) so the fault trace lands on screen point
+// (px, py), given in CSS px.
+function centerTraceAtPx(px, py) {
+  const c = state.cam, W = canvas.clientWidth, H = canvas.clientHeight;
+  const ey = c.extent, ex = ey * W / H;
+  const [tx, ty] = traceCenter();
+  c.ox = tx - ((px / W) * 2 - 1) * ex;
+  c.oy = ty - ((1 - py / H) * 2 - 1) * ey;
+}
+
+function recenterOnTrace() {
+  const a = usableAnchor();
+  centerTraceAtPx(a.ax, a.ay);
+}
+
+// Zoom + recenter so the whole fault footprint (plus a margin) fits inside the
+// non-panel region, with the trace centered there. Used when importing a USGS
+// event, whose rupture can be far larger than the current view.
+function frameFault() {
+  const a = usableAnchor();
+  const [tx, ty] = traceCenter();
+  let rx = 0, ry = 0; // farthest corner reach from the trace, per axis (km)
+  for (const [x, y] of faultCorners()) {
+    rx = Math.max(rx, Math.abs(x - tx));
+    ry = Math.max(ry, Math.abs(y - ty));
+  }
+  const H = canvas.clientHeight;
+  const halfPxX = Math.max(1, Math.min(a.ax - a.x0, a.x1 - a.ax));
+  const halfPxY = Math.max(1, Math.min(a.ay - a.y0, a.y1 - a.ay));
+  const BUFFER = 1.5; // leave ~50% breathing room around the fault
+  // world per px = 2*extent/H, so a reach of R needs extent >= R*H/(2*halfPx).
+  const extX = (rx * BUFFER * H) / (2 * halfPxX);
+  const extY = (ry * BUFFER * H) / (2 * halfPxY);
+  state.cam.extent = clamp(Math.max(extX, extY, 1), 0.5, 5000);
+  centerTraceAtPx(a.ax, a.ay);
 }
 
 function render() {
@@ -508,10 +575,11 @@ for (const [k, label, unit, min, max] of FAULT_FIELDS) {
 }
 const presetSel = document.getElementById("preset");
 for (const name of Object.keys(PRESETS)) presetSel.add(new Option(name, name));
-presetSel.addEventListener("change", () => {
+function applyPreset() {
   Object.assign(state.fault, PRESETS[presetSel.value]);
-  constrainFault(); refreshAll(); onChange();
-});
+  constrainFault(); refreshAll(); frameFault(); onChange();
+}
+presetSel.addEventListener("change", applyPreset);
 
 // -------------------------------------------------------- USGS event import
 // Load a real event by ComCat ID: strike/dip/rake from a nodal plane of its
@@ -541,7 +609,7 @@ function applyUsgsPlane() {
     usgsEvent.planes[usgsPlane], usgsEvent.mw, usgsEvent.depthKm,
     FAULT_LIMITS, SURFACE_MARGIN);
   Object.assign(state.fault, fault);
-  constrainFault(); refreshAll(); onChange();
+  constrainFault(); refreshAll(); frameFault(); onChange();
   setUsgsMsg(`${usgsEvent.title} · Mw ${usgsEvent.mw.toFixed(1)}, `
     + `depth ${usgsEvent.depthKm.toFixed(0)} km`
     + (notes.length ? ` · ${notes.join("; ")}` : ""));
@@ -549,7 +617,10 @@ function applyUsgsPlane() {
 
 const usgsInput = document.getElementById("usgsid");
 const usgsButton = document.getElementById("usgsload");
+// The Load button serves both scenario sources: with text in the box it imports
+// that USGS event; empty, it (re)applies the selected example preset.
 async function loadUsgsEvent() {
+  if (!usgsInput.value.trim()) { applyPreset(); return; }
   const id = extractEventId(usgsInput.value);
   if (!id) { setUsgsMsg("Paste a USGS event ID or event-page URL.", true); return; }
   usgsButton.disabled = true;
@@ -574,9 +645,38 @@ usgsInput.addEventListener("keydown", (e) => { if (e.key === "Enter") loadUsgsEv
 document.getElementById("showfault").addEventListener("change", (e) => {
   state.showFault = e.target.checked; onChange();
 });
-document.getElementById("resetview").addEventListener("click", () => {
-  state.cam = { extent: 40, ox: 0, oy: 0 }; onChange();
-});
+// Full reset: restore every parameter to its default, drop any loaded USGS
+// event, and wipe the shareable state out of the URL entirely -- then re-frame
+// the default fault. Mutates the existing state objects in place (rather than
+// reassigning) so the control closures keep pointing at live values.
+function resetAll() {
+  clearTimeout(urlTimer); // cancel any pending writeUrl that would re-dirty the URL
+  Object.assign(state.fault, DEFAULTS.fault);
+  Object.assign(state.insar, DEFAULTS.insar);
+  Object.assign(state.cam, DEFAULTS.cam);
+  state.quantity = DEFAULTS.quantity;
+  state.view = DEFAULTS.view;
+  DEFAULTS.amp.forEach((v, i) => { state.amp[i] = v; });
+  state.showFault = DEFAULTS.showFault;
+  usgsEvent = null; usgsPlane = 0;
+  presetSel.selectedIndex = 0;
+  setUsgsMsg("");
+  usgsInput.value = "";
+  history.replaceState(null, "", location.pathname + location.search); // clear #hash
+
+  constrainFault();
+  buildPlaneToggle();
+  buildInsar();
+  refreshAll();
+  document.getElementById("showfault").checked = state.showFault;
+  buildQuantity();
+  buildSegments();
+  buildViewOpts();
+  recenterOnTrace();
+  updateLegend();
+  requestRender();
+}
+document.getElementById("resetview").addEventListener("click", resetAll);
 document.getElementById("collapse").addEventListener("click", () => {
   const panel = document.getElementById("panel");
   panel.classList.toggle("collapsed");
@@ -620,6 +720,10 @@ window.addEventListener("hashchange", () => {
 });
 
 // ------------------------------------------------------------- init
+// A shared link carries the full camera in its #hash; honor it verbatim. A bare
+// load (no hash) instead auto-frames: center the fault trace in the non-panel
+// area of the window.
+const hadUrlState = location.hash.length > 0;
 readUrl();
 constrainFault();
 buildInsar();
@@ -628,5 +732,6 @@ document.getElementById("showfault").checked = state.showFault;
 buildQuantity();
 buildSegments();
 buildViewOpts();
+if (!hadUrlState) recenterOnTrace();
 updateLegend();
 requestRender();
