@@ -563,6 +563,7 @@ async function loadUsgsEvent() {
     usgsEvent = null;
     buildPlaneToggle();
     setUsgsMsg(err.message, true);
+    console.error("USGS import failed:", err); // surface the real cause in devtools
   } finally {
     usgsButton.disabled = false;
   }

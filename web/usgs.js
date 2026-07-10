@@ -99,21 +99,89 @@ export function extractEventId(text) {
   return m ? m[1] : t.replace(/[/?#\s].*$/, "");
 }
 
-// Parse a ComCat detail GeoJSON feature into { title, mw, depthKm, planes }.
-// Product property values are strings in ComCat. Older focal-mechanism
-// products call the rake "slip". Throws with a user-facing message when no
-// usable mechanism exists. Exported for the node test.
-export function parseEventFeature(geo) {
-  const props = geo?.properties;
-  if (!props) throw new Error("Unexpected response from the USGS API.");
-  const products = props.products ?? {};
-  // Products are ordered by preference; moment tensors over first-motion
-  // focal mechanisms.
-  const src = (products["moment-tensor"] ?? products["focal-mechanism"] ?? [])[0];
-  const title = props.title ?? "USGS event";
-  if (!src) throw new Error(`No focal mechanism is available for “${title}”.`);
+// --------------------------------------------------- moment tensor -> planes
+// Some ComCat moment-tensor products (regional networks especially) carry only
+// the tensor components, not pre-derived nodal planes. Recover the two nodal
+// planes from the tensor so those events still load.
 
-  const mp = src.properties ?? {};
+// Cyclic Jacobi eigen-decomposition of a symmetric 3x3 matrix. Returns
+// eigenvalues and their eigenvectors (vecs[j] is the unit vector for values[j]).
+function jacobiEigen(A) {
+  const a = A.map((r) => r.slice());
+  const v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let sweep = 0; sweep < 100; sweep++) {
+    const off = Math.abs(a[0][1]) + Math.abs(a[0][2]) + Math.abs(a[1][2]);
+    if (off < 1e-20) break;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+      if (Math.abs(a[p][q]) < 1e-300) continue;
+      const phi = 0.5 * Math.atan2(2 * a[p][q], a[q][q] - a[p][p]);
+      const c = Math.cos(phi), s = Math.sin(phi);
+      for (let k = 0; k < 3; k++) {
+        const akp = a[k][p], akq = a[k][q];
+        a[k][p] = c * akp - s * akq; a[k][q] = s * akp + c * akq;
+      }
+      for (let k = 0; k < 3; k++) {
+        const apk = a[p][k], aqk = a[q][k];
+        a[p][k] = c * apk - s * aqk; a[q][k] = s * apk + c * aqk;
+      }
+      for (let k = 0; k < 3; k++) {
+        const vkp = v[k][p], vkq = v[k][q];
+        v[k][p] = c * vkp - s * vkq; v[k][q] = s * vkp + c * vkq;
+      }
+    }
+  }
+  return {
+    values: [a[0][0], a[1][1], a[2][2]],
+    vecs: [0, 1, 2].map((j) => [v[0][j], v[1][j], v[2][j]]),
+  };
+}
+
+const DEG_PER_RAD = 180 / Math.PI;
+const unit = (u) => { const m = Math.hypot(...u) || 1; return u.map((x) => x / m); };
+
+// One nodal plane (strike/dip/rake, degrees) from an upward fault normal and
+// slip vector, both in (North, East, Down) -- Aki & Richards convention.
+function vecToSDR(n, s) {
+  if (n[2] > 0) { n = n.map((x) => -x); s = s.map((x) => -x); } // normal points up
+  const [n1, n2] = n;
+  const sinDip = Math.hypot(n1, n2);
+  const dip = Math.atan2(sinDip, -n[2]);        // 0..90
+  const strike = Math.atan2(-n1, n2);
+  const cp = Math.cos(strike), sp = Math.sin(strike);
+  // sin(rake) = -slip_down / sin(dip); a near-horizontal fault (sinDip -> 0)
+  // has an undefined strike/rake, so fall back to the raw down component.
+  const sinLambda = sinDip > 1e-9 ? -s[2] / sinDip : -s[2];
+  const rake = Math.atan2(sinLambda, s[0] * cp + s[1] * sp);
+  return {
+    strike: ((strike * DEG_PER_RAD) % 360 + 360) % 360,
+    dip: dip * DEG_PER_RAD,
+    rake: rake * DEG_PER_RAD,
+  };
+}
+
+// The two nodal planes of a moment tensor given in the GCMT/USGS spherical
+// system (r, t, p) = (up, south, east). Exported for the node test.
+export function nodalPlanesFromTensor(t) {
+  const M = [
+    [t.mrr, t.mrt, t.mrp],
+    [t.mrt, t.mtt, t.mtp],
+    [t.mrp, t.mtp, t.mpp],
+  ];
+  const { values, vecs } = jacobiEigen(M);
+  const order = [0, 1, 2].sort((i, j) => values[i] - values[j]);
+  const toNED = (u) => [-u[1], u[2], -u[0]]; // (r,t,p) -> (N,E,D)
+  const P = unit(toNED(vecs[order[0]])); // pressure axis (min eigenvalue)
+  const T = unit(toNED(vecs[order[2]])); // tension axis (max eigenvalue)
+  const normal = unit(T.map((x, i) => x + P[i]));
+  const slip = unit(T.map((x, i) => x - P[i]));
+  return [vecToSDR(normal, slip), vecToSDR(slip, normal)];
+}
+
+// Pull the two nodal planes out of one product's properties: the pre-derived
+// nodal-plane-* fields if present (older focal mechanisms name the rake
+// "slip"), otherwise computed from the tensor-* components. Returns null when
+// the product carries neither.
+function planesFromProps(mp) {
   const num = (k) => {
     const v = parseFloat(mp[k]);
     return Number.isFinite(v) ? v : null;
@@ -123,10 +191,47 @@ export function parseEventFeature(geo) {
     dip: num(`nodal-plane-${n}-dip`),
     rake: num(`nodal-plane-${n}-rake`) ?? num(`nodal-plane-${n}-slip`),
   }));
-  if (planes.some((p) => p.strike == null || p.dip == null || p.rake == null)) {
+  if (planes.every((p) => p.strike != null && p.dip != null && p.rake != null)) {
+    return planes;
+  }
+  const comps = ["mrr", "mtt", "mpp", "mrt", "mrp", "mtp"].map((c) => num(`tensor-${c}`));
+  if (comps.every((v) => v != null)) {
+    const [mrr, mtt, mpp, mrt, mrp, mtp] = comps;
+    return nodalPlanesFromTensor({ mrr, mtt, mpp, mrt, mrp, mtp });
+  }
+  return null;
+}
+
+// Parse a ComCat detail GeoJSON feature into { title, mw, depthKm, planes }.
+// Scans every moment-tensor product (preferred) then every focal-mechanism
+// product for the first one with usable nodal planes -- a regional network's
+// tensor-only product and a global product can coexist on one event. Product
+// property values are strings in ComCat. Throws a user-facing message when no
+// usable mechanism exists. Exported for the node test.
+export function parseEventFeature(geo) {
+  const props = geo?.properties;
+  if (!props) throw new Error("Unexpected response from the USGS API.");
+  const products = props.products ?? {};
+  const title = props.title ?? "USGS event";
+  const candidates = [...(products["moment-tensor"] ?? []),
+                      ...(products["focal-mechanism"] ?? [])];
+  if (candidates.length === 0) {
+    throw new Error(`No focal mechanism is available for “${title}”.`);
+  }
+
+  let chosen = null, planes = null;
+  for (const prod of candidates) {
+    planes = planesFromProps(prod.properties ?? {});
+    if (planes) { chosen = prod; break; }
+  }
+  if (!planes) {
     throw new Error(`The mechanism for “${title}” has no usable nodal planes.`);
   }
 
+  const num = (k) => {
+    const v = parseFloat((chosen.properties ?? {})[k]);
+    return Number.isFinite(v) ? v : null;
+  };
   const mw = num("derived-magnitude") ?? (Number.isFinite(props.mag) ? props.mag : null);
   const depthKm = num("derived-depth") ??
     (Number.isFinite(geo.geometry?.coordinates?.[2]) ? geo.geometry.coordinates[2] : null);
@@ -138,25 +243,32 @@ export function parseEventFeature(geo) {
 
 const DETAIL_URL = (id) =>
   `https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/${encodeURIComponent(id)}.geojson`;
-const FDSN_URL = (id) =>
-  `https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=${encodeURIComponent(id)}&format=geojson`;
 
-// Fetch an event by ID. Tries the realtime detail feed first, then the FDSN
-// event service (which also resolves alias/merged event IDs).
-export async function fetchUsgsEvent(id) {
-  let lastStatus = 0;
-  for (const url of [DETAIL_URL(id), FDSN_URL(id)]) {
-    let resp;
-    try {
-      resp = await fetch(url);
-    } catch {
-      throw new Error("Could not reach the USGS API — check your connection.");
-    }
-    if (resp.ok) return parseEventFeature(await resp.json());
-    lastStatus = resp.status;
+// Fetch an event by ComCat ID from the realtime detail feed. This is the only
+// endpoint that carries the moment-tensor / focal-mechanism products (the FDSN
+// summary GeoJSON does not), and it resolves an event's associated/alias IDs
+// server-side, so one request suffices. The feed is CORS-enabled
+// (Access-Control-Allow-Origin: *), so it works from a static page.
+//
+// A hard timeout via AbortController turns a stalled request into a visible
+// error instead of leaving the UI stuck on "Looking up event...". A rejected
+// fetch is a network failure or a CORS block, not a bad ID -- say so plainly.
+export async function fetchUsgsEvent(id, timeoutMs = 12000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let resp;
+  try {
+    resp = await fetch(DETAIL_URL(id), { signal: ctrl.signal });
+  } catch (err) {
+    throw new Error(err?.name === "AbortError"
+      ? "The USGS request timed out — check your connection and try again."
+      : "Could not reach the USGS API (network error or blocked by the browser).");
+  } finally {
+    clearTimeout(timer);
   }
-  if (lastStatus === 404 || lastStatus === 400) {
+  if (resp.status === 404 || resp.status === 400) {
     throw new Error(`Event “${id}” was not found — check the ID.`);
   }
-  throw new Error(`USGS API error (HTTP ${lastStatus}).`);
+  if (!resp.ok) throw new Error(`USGS API error (HTTP ${resp.status}).`);
+  return parseEventFeature(await resp.json());
 }

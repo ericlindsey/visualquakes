@@ -1,10 +1,11 @@
 // Unit tests for the USGS import logic in web/usgs.js (scaling relations,
-// free-surface handling, ComCat parsing). Network-free.
+// free-surface handling, ComCat parsing, and fetch error paths via a stubbed
+// global fetch). The real network is never touched.
 //   node web/bench/test-usgs.mjs
 
 import {
   classifyMechanism, scaledDimensions, moment, faultFromMechanism,
-  extractEventId, parseEventFeature,
+  extractEventId, parseEventFeature, fetchUsgsEvent, nodalPlanesFromTensor,
 } from "../usgs.js";
 
 // Mirror app.js FAULT_FIELDS ranges.
@@ -147,6 +148,120 @@ const mtProps = {
   try { parseEventFeature(feature({ origin: [{ properties: {} }] })); }
   catch (e) { msg = e.message; }
   check("parse: no mechanism throws", msg.includes("No focal mechanism"), msg);
+}
+
+// ---- moment tensor -> nodal planes -----------------------------------------
+// Oracle: build a tensor from a known strike/dip/rake with the Aki & Richards
+// forward formula (the exact GCMT/USGS convention), then require the recovered
+// planes to include that plane. Self-consistent, so no external catalog needed.
+const rad = (d) => d * Math.PI / 180;
+function tensorFromSDR(strike, dip, rake) {
+  const f = rad(strike), d = rad(dip), l = rad(rake);
+  const s2d = Math.sin(2 * d), c2d = Math.cos(2 * d);
+  const sd = Math.sin(d), cd = Math.cos(d);
+  const sl = Math.sin(l), cl = Math.cos(l);
+  const sf = Math.sin(f), cf = Math.cos(f), s2f = Math.sin(2 * f), c2f = Math.cos(2 * f);
+  return {
+    mrr: s2d * sl,
+    mtt: -(sd * cl * s2f + s2d * sl * sf * sf),
+    mpp: sd * cl * s2f - s2d * sl * cf * cf,
+    mrt: -(cd * cl * cf + c2d * sl * sf),
+    mrp: cd * cl * sf - c2d * sl * cf,
+    mtp: -(sd * cl * c2f + 0.5 * s2d * sl * s2f),
+  };
+}
+// Angular distance between two strike/dip/rake triples, in degrees, accounting
+// for 360-deg wrap on strike and rake.
+function planeErr(a, b) {
+  const wrap = (x) => ((x + 180) % 360 + 360) % 360 - 180;
+  return Math.max(Math.abs(wrap(a.strike - b.strike)),
+    Math.abs(a.dip - b.dip), Math.abs(wrap(a.rake - b.rake)));
+}
+for (const sdr of [
+  { strike: 322, dip: 81, rake: -173 }, // Ridgecrest-like strike-slip
+  { strike: 30, dip: 45, rake: 90 },    // pure thrust
+  { strike: 210, dip: 55, rake: -90 },  // pure normal
+  { strike: 115, dip: 70, rake: 20 },   // oblique
+  { strike: 0, dip: 90, rake: 0 },      // vertical strike-slip
+]) {
+  const [p1, p2] = nodalPlanesFromTensor(tensorFromSDR(sdr.strike, sdr.dip, sdr.rake));
+  const best = Math.min(planeErr(p1, sdr), planeErr(p2, sdr));
+  check(`tensor->planes recovers ${sdr.strike}/${sdr.dip}/${sdr.rake}`, best < 0.5, `err ${best.toFixed(3)}`);
+}
+// Parsing a moment-tensor product that carries only tensor components (no
+// pre-derived nodal-plane-* fields) must still yield planes.
+{
+  const t = tensorFromSDR(120, 50, 80);
+  const tensorProps = Object.fromEntries(
+    ["mrr", "mtt", "mpp", "mrt", "mrp", "mtp"].map((c) => [`tensor-${c}`, String(t[c])]));
+  tensorProps["derived-magnitude"] = "5.6";
+  tensorProps["derived-depth"] = "8.1";
+  const ev = parseEventFeature(feature({ "moment-tensor": [{ properties: tensorProps }] }, 5.6));
+  check("parse: tensor-only product yields planes",
+    ev.planes.length === 2 && ev.planes.every((p) => Number.isFinite(p.strike)));
+  check("parse: tensor-only plane is correct",
+    Math.min(planeErr(ev.planes[0], { strike: 120, dip: 50, rake: 80 }),
+      planeErr(ev.planes[1], { strike: 120, dip: 50, rake: 80 })) < 0.5);
+}
+// When the preferred moment-tensor product lacks usable planes, fall through
+// to a later product that has them.
+{
+  const good = {
+    "nodal-plane-1-strike": "10", "nodal-plane-1-dip": "40", "nodal-plane-1-rake": "95",
+    "nodal-plane-2-strike": "184", "nodal-plane-2-dip": "50", "nodal-plane-2-rake": "86",
+  };
+  const ev = parseEventFeature(feature({
+    "moment-tensor": [{ properties: { "scalar-moment": "1e17" } }, { properties: good }],
+  }, 5.0));
+  check("parse: skips product with no planes", ev.planes[0].strike === 10);
+}
+
+// ---- fetch error paths (fetchUsgsEvent) ------------------------------------
+// These cover the live-site failure modes the pure logic can't: a stalled
+// request, a network/CORS rejection, an HTTP 404, and a 200 with no mechanism.
+// globalThis.fetch is stubbed; the real network is never touched.
+async function expectReject(name, promise, includes) {
+  try { await promise; check(name, false, "expected rejection"); }
+  catch (e) { check(name, e.message.includes(includes), e.message); }
+}
+{
+  const realFetch = globalThis.fetch;
+
+  // A request that never resolves but honors the abort signal -> timeout msg.
+  globalThis.fetch = (_url, opts) => new Promise((_res, rej) => {
+    opts?.signal?.addEventListener("abort",
+      () => rej(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  });
+  await expectReject("fetch: timeout message",
+    fetchUsgsEvent("ci38457511", 20), "timed out");
+
+  // A rejected fetch (CORS/network) -> reachability message, not "not found".
+  globalThis.fetch = () => Promise.reject(new TypeError("Failed to fetch"));
+  await expectReject("fetch: network/CORS message",
+    fetchUsgsEvent("ci38457511"), "Could not reach");
+
+  // HTTP 404 -> not-found message.
+  globalThis.fetch = () => Promise.resolve({ ok: false, status: 404 });
+  await expectReject("fetch: 404 not found",
+    fetchUsgsEvent("bogus1234"), "was not found");
+
+  // HTTP 200 but no mechanism -> parse error propagates.
+  globalThis.fetch = () => Promise.resolve({
+    ok: true, status: 200,
+    json: async () => feature({ origin: [{ properties: {} }] }),
+  });
+  await expectReject("fetch: 200 no mechanism",
+    fetchUsgsEvent("ci00000000"), "No focal mechanism");
+
+  // HTTP 200 with a moment tensor -> resolves to a parsed event.
+  globalThis.fetch = () => Promise.resolve({
+    ok: true, status: 200,
+    json: async () => feature({ "moment-tensor": [{ properties: mtProps }] }),
+  });
+  const ev = await fetchUsgsEvent("ci38457511");
+  check("fetch: 200 success parses", ev.mw === 7.05 && ev.planes[0].strike === 322);
+
+  globalThis.fetch = realFetch;
 }
 
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1); }
