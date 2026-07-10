@@ -64,6 +64,18 @@
   select, .btn { width: 100%; box-sizing: border-box; margin-top: 6px;
     background: rgba(0, 0, 0, 0.32); border: 1px solid rgba(255, 255, 255, 0.16);
     color: #f0f0f2; border-radius: 7px; padding: 5px 7px; font: inherit; cursor: pointer; }
+  /* USGS event loader: ID box + Load button on one line, status text below. */
+  .usgsrow { display: flex; gap: 6px; }
+  .usgsrow input[type=text] { flex: 1 1 auto; min-width: 0; margin-top: 6px;
+    background: rgba(0, 0, 0, 0.32); border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #f0f0f2; border-radius: 7px; padding: 5px 7px; font: inherit; }
+  .usgsrow input[type=text]:focus { outline: 1px solid #4b8bff; border-color: #4b8bff; }
+  .usgsrow .btn { width: auto; flex: 0 0 auto; padding: 5px 12px; }
+  .usgsrow .btn:disabled { opacity: 0.5; cursor: wait; }
+  #usgsmsg { font-size: 11px; color: #9aa3b4; margin-top: 4px; }
+  #usgsmsg:empty { display: none; }
+  #usgsmsg.err { color: #ff9d9d; }
+
   .chk { display: flex; align-items: center; gap: 7px; margin-top: 8px; color: #c7ccd8; }
   .chk input { accent-color: #4b8bff; }
 
@@ -165,6 +177,13 @@
     <div class="group">
       <div class="gtitle">Scenario</div>
       <select id="preset"></select>
+      <div class="usgsrow">
+        <input type="text" id="usgsid" placeholder="USGS event ID (e.g. ci38457511)"
+               spellcheck="false" autocomplete="off">
+        <button class="btn" id="usgsload">Load</button>
+      </div>
+      <div id="usgsplane"></div>
+      <div id="usgsmsg"></div>
       <label class="chk"><input type="checkbox" id="showfault" checked> Show fault outline</label>
       <button class="btn" id="resetview">Reset view</button>
     </div>

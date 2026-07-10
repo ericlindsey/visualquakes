@@ -53,14 +53,19 @@ Status keys: `[ ]` todo · `[~]` in progress · `[x]` done.
       https://ericlindsey.github.io/visualquakes/.
 - [x] Add the live URL + a screenshot to the README.
 
-### USGS event import `[ ]`
-- [ ] Accept a **USGS event ID** (e.g. from the ComCat / earthquake.usgs.gov
-      API) and build an **approximate fault** from it: pull magnitude and, when
-      available, the moment-tensor / focal-mechanism (nodal plane → strike / dip
-      / rake) and depth; derive length / width / slip from scaling relations
-      (e.g. Wells & Coppersmith) where finite-fault data is absent. Populate the
-      sliders so the user lands on a plausible scenario for a real earthquake.
-      Network fetch only — keep the site static (no backend).
+### USGS event import `[x]`
+- [x] Accept a **USGS event ID** (or a pasted event-page URL) and build an
+      **approximate fault** from it (`web/usgs.js` + a Scenario-panel loader):
+      fetches the ComCat detail feed (FDSN event service as fallback for alias
+      IDs), reads the preferred moment-tensor / focal-mechanism product with an
+      **NP1 / NP2 nodal-plane toggle**, and reports an inline error when the
+      event has no mechanism. Length / width come from **Wells & Coppersmith
+      (1994)** subsurface scaling for the mechanism type (classified from
+      rake); if that width would breach the free surface at the catalog depth,
+      width is trimmed and length extended (area preserved) to keep the rupture
+      buried; slip is set from the scalar moment so the Mw readout matches the
+      event wherever slider limits allow. Pure logic is unit-tested,
+      network-free, by `node web/bench/test-usgs.mjs`.
 
 ### tilt / strain `[x]`
 - [x] Port `okada85.tilt` and `okada85.strain` to JS (`web/bench/okada85.mjs`,
