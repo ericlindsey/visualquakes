@@ -104,15 +104,25 @@ peak (~0.009 mm)**. No double-precision emulation or near-fault CPU fallback is
 needed; plain `highp` fp32 is sufficient. Re-check if extreme geometries (very
 shallow, near-vertical, observations on the fault trace) are exercised.
 
-## The benchmark harness
+## The benchmark page
 
-`web/bench/` is a standalone, framework-free probe that produced the numbers
-above:
+The interactive benchmark ships with the site at
+[`web/benchmark.html`](web/benchmark.html) (linked from the app's About panel;
+live at `…/benchmark.html`). It reproduces the measurements above on the
+visitor's own hardware:
 
-- `okada-bench.html` — times the WebGL2 compute pass (256²–2048², ms/frame +
-  fps) and the JS main-thread CPU port (256²/512²); a **Validate** button
-  renders LOS on the reference grid, reads it back, and reports max fp32 error
-  vs the float64 oracle.
+- **GPU pass** — times the WebGL2 compute pass over user-selectable grids
+  (256²–4096²) and frame counts, using `EXT_disjoint_timer_query` when
+  available (per-frame-sync upper bound otherwise), and reports ms/frame, fps,
+  and Gpix/s.
+- **CPU baseline** — the same scenario through the JS float64 port on the main
+  thread, up to a user-selectable grid cap (extrapolated ∝ pixel count beyond
+  it), with the measured GPU-vs-CPU speedup as the headline number.
+- **Accuracy check** — renders LOS on the reference grid, reads it back, and
+  reports max fp32 error vs the float64 Python oracle.
+
+The fixtures and Node-side checks live in `web/bench/`:
+
 - `okada85.mjs` — the JS float64 port (CPU oracle / fallback renderer).
 - `gen_reference.py` → `reference.json`, `validate.mjs` — Node check of the JS
   port vs a Python-exported fixture (matches to ~1e-19 km).
@@ -122,7 +132,7 @@ above:
 Run it the same way as the site (ES modules need HTTP):
 
 ```bash
-cd web/bench
+cd web
 python -m http.server 8000
-# open http://localhost:8000/okada-bench.html
+# open http://localhost:8000/benchmark.html
 ```
