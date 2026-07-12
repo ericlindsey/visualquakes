@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisualQuakes — GPU benchmark</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0c10;
+    --surface: #15161b;          /* card surface (palette validated against this) */
+    --border: rgba(255, 255, 255, 0.10);
+    --ink: #f0f0f2;
+    --ink-2: #c7ccd8;
+    --muted: #8a90a0;
+    --grid: #26272c;             /* hairline gridlines */
+    --axis: #383840;
+    --accent: #2d6cdf;
+    --gpu: #3987e5;              /* series 1: GPU (WebGL2) */
+    --cpu: #199e70;              /* series 2: CPU (JS float64) */
+  }
+  html { background: var(--bg); }
+  body { margin: 0; color: var(--ink);
+    font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 20px 16px 48px; }
+
+  header h1 { font-size: 22px; font-weight: 650; margin: 8px 0 4px; letter-spacing: 0.2px; }
+  header .sub { color: var(--ink-2); max-width: 70ch; }
+  .backlink { color: #6aa6ff; text-decoration: none; font-size: 13px; }
+  .backlink:hover { text-decoration: underline; }
+  a { color: #6aa6ff; }
+
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px 18px; margin-top: 16px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); }
+  .card h2 { font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--muted); margin: 0 0 10px; }
+
+  #device { color: var(--ink-2); font-size: 13px; }
+  #device b { color: var(--ink); font-weight: 600; }
+  .tag { display: inline-block; border: 1px solid var(--border); border-radius: 20px;
+    padding: 1px 9px; margin: 2px 4px 2px 0; font-size: 12px; color: var(--ink-2); }
+  .tag.ok::before { content: "✓ "; color: #0ca30c; }
+  .tag.no::before { content: "· "; color: var(--muted); }
+
+  /* Live preview: canvas + sliders side by side */
+  .preview { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  #view { background: #000; border-radius: 8px; width: 300px; height: 300px;
+    max-width: 100%; image-rendering: pixelated; flex: 0 0 auto; }
+  .sliders { flex: 1 1 260px; min-width: 240px; }
+  .row { display: grid; grid-template-columns: 52px 1fr 76px; gap: 8px;
+    align-items: center; margin: 5px 0; }
+  .row label { color: var(--ink-2); white-space: nowrap; }
+  .row output { text-align: right; color: var(--ink-2); font-size: 12px;
+    font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: #4b8bff; margin: 0; }
+  .preview-note { flex-basis: 100%; color: var(--muted); font-size: 12px; margin: 2px 0 0; }
+
+  /* Options row (above the results it scopes) */
+  .options { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .opt-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .opt-group > span { color: var(--ink-2); font-size: 13px; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .chips button { background: rgba(255, 255, 255, 0.06); color: var(--ink-2);
+    border: 1px solid var(--border); border-radius: 20px; padding: 3px 11px;
+    font: inherit; font-size: 13px; cursor: pointer; }
+  .chips button.active { background: var(--accent); border-color: #4b8bff; color: #fff; }
+  .chips button:disabled { opacity: 0.4; cursor: not-allowed; }
+  select { background: rgba(0, 0, 0, 0.32); border: 1px solid var(--border);
+    color: var(--ink); border-radius: 7px; padding: 4px 7px; font: inherit; }
+  .runbtn { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 7px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  .runbtn:hover { background: #3a7af0; }
+  .runbtn:disabled { opacity: 0.5; cursor: wait; }
+  #status { color: var(--muted); font-size: 13px; margin-top: 8px; min-height: 1.2em; }
+  #status.err { color: #ff9d9d; }
+
+  /* Stat tiles */
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .stat { flex: 1 1 160px; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; }
+  .stat .lab { color: var(--muted); font-size: 12px; }
+  .stat .val { font-size: 30px; font-weight: 600; line-height: 1.2; margin: 2px 0; }
+  .stat .ctx { color: var(--ink-2); font-size: 12px; }
+
+  /* Chart */
+  #chartbox { margin-top: 16px; position: relative; overflow-x: auto; }
+  #chartbox svg { display: block; min-width: 560px; width: 100%; height: auto; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px;
+    color: var(--ink-2); font-size: 12px; }
+  .legend .key { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .legend .dot.hollow { background: none !important; border: 2px solid; box-sizing: border-box; }
+  #tooltip { position: absolute; pointer-events: none; display: none; z-index: 5;
+    background: #0c0d11; border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 12px; color: var(--ink-2); white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
+  #tooltip b { color: var(--ink); font-size: 13px; }
+  #tooltip .k { display: inline-block; width: 10px; height: 3px; border-radius: 2px;
+    vertical-align: middle; margin-right: 5px; }
+
+  /* Results table */
+  table { border-collapse: collapse; width: 100%; margin-top: 14px;
+    font-variant-numeric: tabular-nums; font-size: 13px; }
+  th, td { padding: 5px 10px; text-align: right; border-bottom: 1px solid var(--grid); }
+  th { color: var(--muted); font-weight: 500; }
+  th:first-child, td:first-child { text-align: left; }
+  td { color: var(--ink-2); }
+  td.strong { color: var(--ink); }
+  .footnote { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+  pre { background: #0c0d11; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; white-space: pre-wrap; font-size: 12.5px; color: var(--ink-2); }
+  .btn2 { background: rgba(255, 255, 255, 0.07); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px;
+    font: inherit; cursor: pointer; }
+  .btn2:hover { border-color: rgba(255, 255, 255, 0.25); }
+  .btn2:disabled { opacity: 0.5; cursor: wait; }
+
+  #nogl { display: none; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="backlink" href="./index.html">← back to VisualQuakes</a>
+  <h1>How fast is the Okada model on <em>your</em> GPU?</h1>
+  <p class="sub">VisualQuakes evaluates the full Okada (1985) dislocation
+  solution once per pixel, every frame — that is what makes dragging a slider
+  feel instant. This page times that computation on your machine two ways:
+  as a <b>WebGL2 fragment shader on your GPU</b> (how the app actually runs)
+  and as the <b>same math in JavaScript on one CPU core</b> (the double-precision
+  port used to validate the shader). Same equations, same grid — measure the
+  difference yourself.</p>
+</header>
+
+<div id="nogl" class="card">
+  <h2>WebGL2 required</h2>
+  <p>This browser/device does not expose WebGL2, so the GPU benchmark cannot
+  run here. The main app has the same requirement.</p>
+</div>
+
+<div class="card" id="devicecard">
+  <h2>Your device</h2>
+  <div id="device"></div>
+</div>
+
+<div class="card" id="previewcard">
+  <h2>What is being computed</h2>
+  <div class="preview">
+    <canvas id="view" width="300" height="300"></canvas>
+    <div class="sliders" id="controls"></div>
+    <p class="preview-note">A live wrapped interferogram of the benchmark
+    scenario. Drag a slider: every pixel re-solves the Okada equations from a
+    handful of updated shader uniforms. The benchmark times exactly this
+    computation on offscreen grids.</p>
+  </div>
+</div>
+
+<div class="card" id="benchcard">
+  <h2>Benchmark</h2>
+  <div class="options">
+    <div class="opt-group"><span>Grids</span>
+      <div class="chips" id="gridchips"></div>
+    </div>
+    <div class="opt-group"><span>Timing frames</span>
+      <select id="frames">
+        <option value="30">30 (fast)</option>
+        <option value="120" selected>120</option>
+        <option value="480">480 (steady)</option>
+      </select>
+    </div>
+    <div class="opt-group"><span>CPU baseline up to</span>
+      <select id="cpucap">
+        <option value="0">off</option>
+        <option value="256">256²</option>
+        <option value="512" selected>512²</option>
+        <option value="1024">1024² (slow)</option>
+      </select>
+    </div>
+    <button class="runbtn" id="run">Run benchmark</button>
+  </div>
+  <div id="status">The CPU passes run on the page's main thread, so the page
+    will stutter while they execute — that is rather the point.</div>
+
+  <div id="results" hidden>
+    <div class="stats" id="stats"></div>
+    <div id="chartbox"><div id="tooltip"></div></div>
+    <div class="legend" id="legend"></div>
+    <table id="restable"></table>
+    <div class="footnote" id="tablenote"></div>
+  </div>
+</div>
+
+<div class="card" id="valcard">
+  <h2>Accuracy check</h2>
+  <p style="color:var(--ink-2); margin-top:0">Speed means nothing if the answers
+  are wrong. GPUs compute in 32-bit floats; the trusted reference
+  (<code>python/</code>, NumPy) uses 64-bit. This renders the reference scenario
+  on your GPU, reads the raw numbers back, and compares them against the
+  double-precision Python output shipped with the site.</p>
+  <button class="btn2" id="validate">Compare GPU output to the Python reference</button>
+  <pre id="valout" hidden></pre>
+</div>
+
+<footer>
+  Methodology, measured baselines, and the fp32 precision analysis:
+  <a href="https://github.com/ericlindsey/VisualQuakes/blob/main/benchmarks.md"
+     target="_blank" rel="noopener">benchmarks.md</a> ·
+  source: <a href="https://github.com/ericlindsey/VisualQuakes"
+     target="_blank" rel="noopener">github.com/ericlindsey/VisualQuakes</a>
+</footer>
+</div>
+
+<script type="module">
+import { VERT_SRC, FRAG_SRC } from "./okada-shader.js";
+import { displacement } from "./bench/okada85.mjs";
+
+const DEG = Math.PI / 180;
+const $ = (id) => document.getElementById(id);
+
+// --- Scenario / view (km; slip in km: 1e-3 km == 1 m) -----------------------
+const params = {
+  depth: 5.0, strike: 30.0, dip: 45.0, L: 10.0, W: 6.0,
+  rake: 90.0, slip: 1.0e-3, open: 0.0, nu: 0.25,
+};
+const view = { extent: 40.0 };
+const insar = { heading: -12.0, incidence: 39.0, wavelength_m: 0.0556 };
+
+function losVec(headingDeg, incDeg) {
+  const h = headingDeg * DEG, inc = incDeg * DEG, az = h + Math.PI / 2;
+  return [-Math.sin(inc) * Math.sin(az), -Math.sin(inc) * Math.cos(az), Math.cos(inc)];
+}
+
+// --- WebGL2 setup ------------------------------------------------------------
+const canvas = $("view");
+const gl = canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: false });
+if (!gl) {
+  $("nogl").style.display = "block";
+  for (const id of ["devicecard", "previewcard", "benchcard", "valcard"])
+    $(id).style.display = "none";
+  throw new Error("no webgl2");
+}
+const floatRender = gl.getExtension("EXT_color_buffer_float");
+const timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+const dbgInfo = gl.getExtension("WEBGL_debug_renderer_info");
+const renderer = gl.getParameter(dbgInfo ? dbgInfo.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+
+$("device").innerHTML = `<b></b>
+  <div style="margin-top:6px">
+    <span class="tag ok">WebGL2</span>
+    <span class="tag ${timerExt ? "ok" : "no"}">GPU timer query${timerExt ? "" : " (unavailable — using a per-frame sync; GPU times are an upper bound)"}</span>
+    <span class="tag ${floatRender ? "ok" : "no"}">float render target${floatRender ? "" : " (unavailable — accuracy check disabled)"}</span>
+  </div>`;
+$("device").querySelector("b").textContent = renderer;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT_SRC));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG_SRC));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+  throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const U = new Proxy({}, {
+  get: (c, name) => name in c ? c[name] : (c[name] = gl.getUniformLocation(prog, name)),
+});
+gl.bindVertexArray(gl.createVertexArray()); // vertices come from gl_VertexID
+
+// Push scenario + view as uniforms. mode 0 = fringe display, 1 = raw floats.
+function setUniforms(ext, mode) {
+  const strike = params.strike * DEG, dip = params.dip * DEG, rake = params.rake * DEG;
+  const look = losVec(insar.heading, insar.incidence);
+  gl.uniform2f(U.u_resolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
+  gl.uniform2f(U.u_extent, ext, ext);
+  gl.uniform2f(U.u_origin, 0, 0);
+  gl.uniform1f(U.u_depth, params.depth);
+  gl.uniform1f(U.u_L, params.L);
+  gl.uniform1f(U.u_W, params.W);
+  gl.uniform1f(U.u_nu, params.nu);
+  gl.uniform1f(U.u_sstr, Math.sin(strike));
+  gl.uniform1f(U.u_cstr, Math.cos(strike));
+  gl.uniform1f(U.u_sdip, Math.sin(dip));
+  gl.uniform1f(U.u_cdip, Math.cos(dip));
+  gl.uniform1f(U.u_U1s, Math.cos(rake) * params.slip / (2 * Math.PI));
+  gl.uniform1f(U.u_U2s, Math.sin(rake) * params.slip / (2 * Math.PI));
+  gl.uniform1f(U.u_U3s, params.open / (2 * Math.PI));
+  gl.uniform1i(U.u_vertical, Math.cos(dip) > Number.EPSILON ? 0 : 1);
+  gl.uniform3f(U.u_look, look[0], look[1], look[2]);
+  gl.uniform1f(U.u_fringe, insar.wavelength_m / 2 / 1000); // km per fringe
+  gl.uniform1i(U.u_mode, mode);
+  gl.uniform1i(U.u_quantity, 0);   // displacement + LOS (the app's hot path)
+  gl.uniform1i(U.u_view, 0);       // wrapped fringes (display mode only)
+  gl.uniform1f(U.u_ampScale, 1);
+  gl.uniform1i(U.u_showFault, 0);
+}
+
+function drawLive() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  setUniforms(view.extent, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// Offscreen render target for timing/validation: RGBA32F when renderable
+// (raw-float path, needed for validation), RGBA8 display path otherwise.
+function makeFBO(n) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, floatRender ? gl.RGBA32F : gl.RGBA8,
+    n, n, 0, gl.RGBA, floatRender ? gl.FLOAT : gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fbo); gl.deleteTexture(tex);
+    return null;
+  }
+  return { fbo, tex };
+}
+function readOnePixel() { // forces the queued draws to finish
+  if (floatRender) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, new Float32Array(4));
+  else gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+}
+
+// --- Live controls -----------------------------------------------------------
+const sliders = [
+  ["strike", "strike", 0, 360, 1, "°"],
+  ["dip", "dip", 1, 90, 0.5, "°"],
+  ["rake", "rake", -180, 180, 1, "°"],
+  ["depth", "depth", 0.5, 30, 0.5, " km"],
+  ["L", "length", 1, 40, 0.5, " km"],
+  ["W", "width", 1, 30, 0.5, " km"],
+  ["slipm", "slip", 0.1, 5, 0.1, " m"],
+];
+for (const [key, label, min, max, step, unit] of sliders) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const init = key === "slipm" ? params.slip * 1000 : params[key];
+  row.innerHTML = `<label></label>
+    <input type="range" min="${min}" max="${max}" step="${step}" value="${init}">
+    <output>${(+init).toFixed(1)}${unit}</output>`;
+  row.querySelector("label").textContent = label;
+  const input = row.querySelector("input"), o = row.querySelector("output");
+  input.addEventListener("input", () => {
+    const v = +input.value;
+    o.textContent = `${v.toFixed(1)}${unit}`;
+    if (key === "slipm") params.slip = v / 1000; else params[key] = v;
+    requestAnimationFrame(drawLive);
+  });
+  $("controls").appendChild(row);
+}
+
+// --- GPU timing --------------------------------------------------------------
+// Naive "queue N draws, sync once" is wrong: the driver pipelines the draws and
+// the wall clock captures CPU dispatch, not GPU execution. Prefer
+// EXT_disjoint_timer_query (true GPU time-elapsed); otherwise force a per-frame
+// sync so the number is at worst an over-estimate — never an under-count.
+function pollQuery(q) {
+  return new Promise((resolve) => {
+    const poll = () => {
+      const disjoint = gl.getParameter(timerExt.GPU_DISJOINT_EXT);
+      if (gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) {
+        const ns = disjoint ? null : gl.getQueryParameter(q, gl.QUERY_RESULT);
+        gl.deleteQuery(q);
+        resolve(ns);
+      } else setTimeout(poll, 1);
+    };
+    poll();
+  });
+}
+
+async function benchGPU(n, frames) {
+  const target = makeFBO(n);
+  if (!target) return null; // e.g. out of GPU memory at large grids
+  gl.viewport(0, 0, n, n);
+  setUniforms(view.extent, floatRender ? 1 : 0);
+  gl.uniform2f(U.u_resolution, n, n);
+  for (let i = 0; i < 8; i++) gl.drawArrays(gl.TRIANGLES, 0, 3); // warm up clocks
+  readOnePixel();
+
+  let ms = null, method = "sync";
+  if (timerExt) {
+    const q = gl.createQuery();
+    gl.beginQuery(timerExt.TIME_ELAPSED_EXT, q);
+    for (let i = 0; i < frames; i++) gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.endQuery(timerExt.TIME_ELAPSED_EXT);
+    gl.flush();
+    const ns = await pollQuery(q);
+    if (ns != null) { ms = ns / 1e6 / frames; method = "gpu-timer"; }
+  }
+  if (ms == null) { // no timer ext, or a disjoint event: per-frame sync fallback
+    const t0 = performance.now();
+    for (let i = 0; i < frames; i++) {
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      readOnePixel(); // stall until this frame is done
+    }
+    ms = (performance.now() - t0) / frames;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(target.fbo);
+  gl.deleteTexture(target.tex);
+  return { ms, method };
+}
+
+function benchCPU(n) {
+  const ext = view.extent;
+  const t0 = performance.now();
+  let acc = 0;
+  for (let j = 0; j < n; j++) {
+    const nn = (((j + 0.5) / n) * 2 - 1) * ext;
+    for (let i = 0; i < n; i++) {
+      const ee = (((i + 0.5) / n) * 2 - 1) * ext;
+      const [ue, un, uz] = displacement(ee, nn, params.depth, params.strike,
+        params.dip, params.L, params.W, params.rake, params.slip, params.open, params.nu);
+      acc += ue + un + uz; // keep the optimizer honest
+    }
+  }
+  return { ms: performance.now() - t0, acc };
+}
+
+// --- Options UI ---------------------------------------------------------------
+const GRIDS = [256, 512, 1024, 2048, 4096];
+const selected = new Set([256, 512, 1024, 2048]);
+for (const n of GRIDS) {
+  const b = document.createElement("button");
+  b.textContent = `${n}²`;
+  if (n > maxTex) b.disabled = true;
+  else {
+    b.classList.toggle("active", selected.has(n));
+    b.addEventListener("click", () => {
+      if (selected.has(n)) selected.delete(n); else selected.add(n);
+      b.classList.toggle("active", selected.has(n));
+    });
+  }
+  $("gridchips").appendChild(b);
+}
+
+// --- Run + results -------------------------------------------------------------
+const fmt = (x, d = 3) => x.toLocaleString("en-US", { maximumFractionDigits: d });
+const fmtSig = (x) => !isFinite(x) ? "—" // 3 significant digits, comma-grouped
+  : x.toLocaleString("en-US", { maximumSignificantDigits: 3 });
+const fmtThr = (gpixs) => gpixs >= 1
+  ? `${fmtSig(gpixs)} Gpx/s` : `${fmtSig(gpixs * 1000)} Mpx/s`;
+
+let running = false;
+$("run").addEventListener("click", async () => {
+  if (running) return;
+  const grids = GRIDS.filter((n) => selected.has(n));
+  if (!grids.length) { $("status").textContent = "Pick at least one grid size."; return; }
+  running = true;
+  $("run").disabled = true;
+  $("status").className = "";
+  const frames = +$("frames").value;
+  const cpuCap = +$("cpucap").value;
+  const rows = [];
+  let method = timerExt ? "gpu-timer" : "sync";
+  try {
+    for (const n of grids) {
+      $("status").textContent = `Timing ${n}×${n} on the GPU (${frames} frames)…`;
+      await new Promise((r) => setTimeout(r, 0));
+      const gpu = await benchGPU(n, frames);
+      if (!gpu) { rows.push({ n, gpu: null, cpu: null, est: false }); continue; }
+      method = gpu.method;
+      let cpu = null, est = false;
+      if (cpuCap && n <= cpuCap) {
+        $("status").textContent = `Running ${n}×${n} on the CPU (main thread — hang on)…`;
+        await new Promise((r) => setTimeout(r, 30)); // let the status paint first
+        cpu = benchCPU(n).ms;
+      }
+      rows.push({ n, gpu: gpu.ms, cpu, est });
+      renderResults(rows, method);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    // Extrapolate the CPU baseline to larger grids (it scales with pixel count).
+    const base = [...rows].reverse().find((r) => r.cpu != null && !r.est);
+    if (base) {
+      for (const r of rows) {
+        if (r.cpu == null && r.gpu != null) {
+          r.cpu = base.cpu * (r.n * r.n) / (base.n * base.n);
+          r.est = true;
+        }
+      }
+    }
+    renderResults(rows, method);
+    $("status").textContent = "Done. Numbers vary with thermals, tab load, and browser — rerun for a feel of the spread.";
+  } catch (e) {
+    $("status").textContent = `Benchmark failed: ${e.message || e}`;
+    $("status").className = "err";
+  } finally {
+    running = false;
+    $("run").disabled = false;
+    drawLive();
+  }
+});
+
+function renderResults(rows, method) {
+  const ok = rows.filter((r) => r.gpu != null);
+  if (!ok.length) return;
+  $("results").hidden = false;
+
+  // Stat tiles. Hero: the measured speedup at the largest directly-timed grid.
+  const meas = [...ok].reverse().find((r) => r.cpu != null && !r.est);
+  const big = ok[ok.length - 1];
+  const gpixs = (big.n * big.n) / (big.gpu / 1000) / 1e9;
+  const dpr = window.devicePixelRatio || 1;
+  const screenPx = Math.round(screen.width * dpr) * Math.round(screen.height * dpr);
+  const fpsScreen = gpixs * 1e9 / screenPx;
+  const tiles = [];
+  if (meas) {
+    tiles.push({
+      lab: "GPU speedup (measured)",
+      val: `${fmtSig(meas.cpu / meas.gpu)}×`,
+      ctx: `vs one CPU core at ${meas.n}×${meas.n}`,
+    });
+  }
+  tiles.push({
+    lab: "GPU throughput",
+    val: fmtThr(gpixs),
+    ctx: `full Okada solutions, at ${big.n}×${big.n}`,
+  });
+  tiles.push({
+    lab: "Headroom at your display",
+    val: `${fmtSig(fpsScreen)} fps`,
+    ctx: `${fmt(screenPx / 1e6, 1)} Mpx screen, compute only`,
+  });
+  $("stats").replaceChildren(...tiles.map((t) => {
+    const d = document.createElement("div");
+    d.className = "stat";
+    d.innerHTML = `<div class="lab"></div><div class="val"></div><div class="ctx"></div>`;
+    d.querySelector(".lab").textContent = t.lab;
+    d.querySelector(".val").textContent = t.val;
+    d.querySelector(".ctx").textContent = t.ctx;
+    return d;
+  }));
+
+  drawChart(ok);
+  drawLegend(ok);
+
+  // Table (the always-reachable, WCAG-clean view of every number).
+  const failed = rows.filter((r) => r.gpu == null);
+  const anyCpu = ok.some((r) => r.cpu != null);
+  const head = `<tr><th>grid</th><th>pixels</th><th>GPU ms/frame</th><th>GPU fps</th>
+    <th>throughput</th>${anyCpu ? "<th>CPU ms/frame</th><th>speedup</th>" : ""}</tr>`;
+  const body = ok.map((r) => {
+    const px = r.n * r.n;
+    const thr = px / (r.gpu / 1000) / 1e9;
+    let cpuCells = "";
+    if (anyCpu) {
+      cpuCells = r.cpu == null ? "<td>—</td><td>—</td>" :
+        `<td>${r.est ? "≈ " : ""}${fmt(r.cpu, r.cpu < 10 ? 2 : 0)}</td>
+         <td class="strong">${r.est ? "≈ " : ""}${fmtSig(r.cpu / r.gpu)}×</td>`;
+    }
+    return `<tr><td>${r.n}×${r.n}</td><td>${fmt(px, 0)}</td>
+      <td class="strong">${r.gpu < 0.01 ? r.gpu.toFixed(4) : fmt(r.gpu, 3)}</td>
+      <td>${fmtSig(1000 / r.gpu)}</td><td>${fmtThr(thr)}</td>${cpuCells}</tr>`;
+  }).join("");
+  $("restable").innerHTML = head + body;
+
+  const notes = [];
+  notes.push(method === "gpu-timer"
+    ? "GPU times are true GPU time-elapsed (EXT_disjoint_timer_query)."
+    : "GPU times use a per-frame sync (no GPU timer extension here) — treat them as an upper bound.");
+  if (ok.some((r) => r.est))
+    notes.push("≈ CPU values above the cap are extrapolated from the largest measured CPU grid (the cost scales with pixel count).");
+  if (!anyCpu) notes.push("CPU baseline was off — enable it to measure a speedup.");
+  if (failed.length)
+    notes.push(`${failed.map((r) => `${r.n}×${r.n}`).join(", ")} skipped: could not allocate the render target.`);
+  $("tablenote").textContent = notes.join(" ");
+}
+
+// --- Chart: per grid size, GPU vs CPU time on a shared log axis ----------------
+const SERIES = {
+  gpu: { color: "var(--gpu)", hex: "#3987e5", name: "GPU (WebGL2 shader)" },
+  cpu: { color: "var(--cpu)", hex: "#199e70", name: "CPU (JS float64, 1 core)" },
+};
+
+function drawChart(rows) {
+  const pts = [];
+  for (const r of rows) {
+    pts.push({ row: r, series: "gpu", ms: r.gpu, est: false });
+    if (r.cpu != null) pts.push({ row: r, series: "cpu", ms: r.cpu, est: r.est });
+  }
+  const values = pts.map((p) => p.ms);
+  const lo = Math.floor(Math.log10(Math.min(...values)));
+  let hi = Math.ceil(Math.log10(Math.max(...values)));
+  if (hi === lo) hi = lo + 1; // degenerate domain (all values on one decade line)
+  const W = 720, mL = 64, mR = 116, mT = 10, mB = 34, rowH = 44;
+  const H = mT + rows.length * rowH + mB;
+  const x = (ms) => mL + (Math.log10(ms) - lo) / (hi - lo) * (W - mL - mR);
+  const y = (i) => mT + i * rowH + rowH / 2;
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Time per frame, GPU versus CPU, by grid size (log scale). Exact values are in the table below.");
+  const el = (tag, attrs, text) => {
+    const e = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text != null) e.textContent = text;
+    return e;
+  };
+
+  // Decade gridlines + tick labels (solid hairlines, recessive).
+  for (let d = lo; d <= hi; d++) {
+    const gx = x(Math.pow(10, d));
+    svg.appendChild(el("line", { x1: gx, y1: mT, x2: gx, y2: H - mB,
+      stroke: "var(--grid)", "stroke-width": 1 }));
+    const v = Math.pow(10, d);
+    const lab = v >= 1000 ? `${v / 1000}k` : v >= 1 ? `${v}` : `${v}`.replace("0.", ".");
+    svg.appendChild(el("text", { x: gx, y: H - mB + 16, "text-anchor": "middle",
+      fill: "var(--muted)", "font-size": 11 }, lab));
+  }
+  const gpuOnly = !pts.some((p) => p.series === "cpu");
+  svg.appendChild(el("text", { x: mL + (W - mL - mR) / 2, y: H - 4,
+    "text-anchor": "middle", fill: "var(--muted)", "font-size": 11 },
+    `${gpuOnly ? "GPU " : ""}time to compute one frame (ms, log scale — left is faster)`));
+
+  rows.forEach((r, i) => {
+    const cy = y(i);
+    svg.appendChild(el("text", { x: mL - 12, y: cy + 4, "text-anchor": "end",
+      fill: "var(--ink-2)", "font-size": 12 }, `${r.n}²`));
+    if (r.cpu != null) { // dumbbell connector under the dots
+      svg.appendChild(el("line", { x1: x(r.gpu), y1: cy, x2: x(r.cpu), y2: cy,
+        stroke: "var(--axis)", "stroke-width": 1 }));
+      svg.appendChild(el("text", { x: W - mR + 12, y: cy + 4,
+        fill: "var(--ink-2)", "font-size": 12 },
+        `${r.est ? "≈" : ""}${fmtSig(r.cpu / r.gpu)}× faster`));
+    }
+  });
+
+  // Dots on top of connectors: 2px surface ring; estimates are hollow.
+  const tip = $("tooltip");
+  for (const p of pts) {
+    const cx = x(p.ms), cy = y(rows.indexOf(p.row));
+    const s = SERIES[p.series];
+    svg.appendChild(el("circle", { cx, cy, r: 7, fill: "var(--surface)" }));
+    svg.appendChild(el("circle", p.est
+      ? { cx, cy, r: 4, fill: "none", stroke: s.color, "stroke-width": 2 }
+      : { cx, cy, r: 5, fill: s.color }));
+    // Oversized transparent hit target carrying the hover/focus tooltip.
+    const hit = el("circle", { cx, cy, r: 13, fill: "transparent", tabindex: 0,
+      role: "img", "aria-label":
+        `${s.name} at ${p.row.n} by ${p.row.n}: ${p.est ? "about " : ""}${fmt(p.ms, p.ms < 10 ? 3 : 0)} milliseconds per frame` });
+    hit.style.cursor = "default";
+    const show = () => {
+      tip.replaceChildren();
+      const k = document.createElement("span");
+      k.className = "k"; k.style.background = s.hex;
+      const b = document.createElement("b");
+      b.textContent = `${p.est ? "≈ " : ""}${fmt(p.ms, p.ms < 10 ? 3 : 0)} ms/frame`;
+      tip.append(k, b, document.createTextNode(` ${s.name} · ${p.row.n}×${p.row.n}${p.est ? " (extrapolated)" : ""}`));
+      tip.style.display = "block";
+      const box = $("chartbox").getBoundingClientRect();
+      const c = hit.getBoundingClientRect();
+      tip.style.left = `${Math.min(c.left - box.left + 16, box.width - tip.offsetWidth - 4)}px`;
+      tip.style.top = `${c.top - box.top - 34}px`;
+    };
+    const hide = () => { tip.style.display = "none"; };
+    hit.addEventListener("pointerenter", show);
+    hit.addEventListener("pointerleave", hide);
+    hit.addEventListener("focus", show);
+    hit.addEventListener("blur", hide);
+    svg.appendChild(hit);
+  }
+
+  const old = $("chartbox").querySelector("svg");
+  if (old) old.remove();
+  $("chartbox").appendChild(svg);
+}
+
+function drawLegend(rows) {
+  const leg = $("legend");
+  leg.replaceChildren();
+  if (!rows.some((r) => r.cpu != null)) return; // single series: the axis title says GPU
+  const entry = (color, label, hollow) => {
+    const k = document.createElement("span");
+    k.className = "key";
+    const d = document.createElement("span");
+    d.className = "dot" + (hollow ? " hollow" : "");
+    d.style[hollow ? "borderColor" : "background"] = color;
+    k.append(d, document.createTextNode(label));
+    return k;
+  };
+  leg.append(entry(SERIES.gpu.hex, SERIES.gpu.name));
+  leg.append(entry(SERIES.cpu.hex, SERIES.cpu.name));
+  if (rows.some((r) => r.est)) leg.append(entry(SERIES.cpu.hex, "extrapolated CPU (cost ∝ pixels)", true));
+}
+
+// --- Validation: render LOS on the reference grid, compare to Python float64 ---
+const valBtn = $("validate");
+if (!floatRender) {
+  valBtn.disabled = true;
+  valBtn.textContent = "Unavailable: this device cannot render to a float texture";
+}
+valBtn.addEventListener("click", async () => {
+  const out = $("valout");
+  out.hidden = false;
+  out.textContent = "Loading the Python-generated reference grid…";
+  let ref;
+  try { ref = await (await fetch("./bench/reference.json")).json(); }
+  catch (e) { out.textContent = "Could not load bench/reference.json."; return; }
+
+  const p = ref.params, N = ref.grid_n, E = p.extent_km;
+  const extShader = E * N / (N - 1); // align pixel centers with linspace(-E, E, N)
+  const saved = JSON.stringify({ params: { ...params }, insar: { ...insar } });
+  Object.assign(params, {
+    depth: p.depth, strike: p.strike, dip: p.dip, L: p.L, W: p.W,
+    rake: p.rake, slip: p.slip, open: p.open, nu: p.nu,
+  });
+  Object.assign(insar, {
+    heading: p.insar_heading_deg, incidence: p.insar_incidence_deg,
+    wavelength_m: p.wavelength_m,
+  });
+
+  const target = makeFBO(N);
+  if (!target) { out.textContent = "Could not allocate a float render target."; return; }
+  gl.viewport(0, 0, N, N);
+  setUniforms(extShader, 1);
+  gl.uniform2f(U.u_resolution, N, N);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const buf = new Float32Array(N * N * 4);
+  gl.readPixels(0, 0, N, N, gl.RGBA, gl.FLOAT, buf);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(target.fbo);
+  gl.deleteTexture(target.tex);
+
+  let maxAbsLos = 0, maxAbsDisp = 0;
+  const peak = Math.max(...ref.los.map(Math.abs));
+  for (let i = 0; i < N * N; i++) {
+    maxAbsLos = Math.max(maxAbsLos, Math.abs(buf[i * 4 + 3] - ref.los[i]));
+    maxAbsDisp = Math.max(maxAbsDisp,
+      Math.abs(buf[i * 4] - ref.ue[i]),
+      Math.abs(buf[i * 4 + 1] - ref.un[i]),
+      Math.abs(buf[i * 4 + 2] - ref.uz[i]));
+  }
+  const rel = maxAbsLos / peak;
+  out.textContent =
+    `GPU fp32 shader vs Python float64 reference (${N}×${N} grid)\n` +
+    `  LOS signal peak        : ${peak.toExponential(3)} km` +
+    ` (${(peak * 1e6).toFixed(1)} mm)\n` +
+    `  max displacement error : ${maxAbsDisp.toExponential(3)} km\n` +
+    `  max LOS error          : ${maxAbsLos.toExponential(3)} km` +
+    ` (${(maxAbsLos * 1e6).toFixed(4)} mm)\n` +
+    `  relative LOS error     : ${(rel * 100).toFixed(4)} % of peak\n` +
+    `  verdict: ${rel < 0.01
+      ? "PASS — your GPU's 32-bit result is within 1% of the 64-bit truth"
+      : "above the 1% budget — near-fault fp32 effects; see benchmarks.md"}`;
+
+  const s = JSON.parse(saved);
+  Object.assign(params, s.params);
+  Object.assign(insar, s.insar);
+  drawLive();
+});
+
+drawLive();
+</script>
+</body>
+</html>

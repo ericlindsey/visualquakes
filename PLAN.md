@@ -41,6 +41,13 @@ The interactive site is built and validated. In short:
   top, above the sliders.
 - **Deploy.** A GitHub Actions workflow (`.github/workflows/static.yml`)
   publishes `web/` as the site root on push to `main`.
+- **Public benchmark page** (`web/benchmark.html`, linked from the About
+  panel): a polished version of the original `web/bench/` proof-of-concept.
+  Visitors time the GPU shader vs the JS float64 CPU port on their own machine
+  (configurable grid sizes 256²–4096², timing frames, CPU-baseline cap with
+  ∝-pixels extrapolation), see a log-scale GPU-vs-CPU comparison chart, stat
+  tiles (speedup, Gpix/s, display-resolution headroom), a full results table,
+  and can run the GPU-fp32-vs-Python-float64 accuracy check.
 
 Conventions to preserve: render in **km** (fp32 mantissa), local Cartesian
 `x=East, y=North, z=Up`, and reproduce `okada85.setup_args`'

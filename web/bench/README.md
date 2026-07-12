@@ -1,8 +1,15 @@
-# Okada WebGL2 proof-of-concept + benchmark
+# Okada validation fixtures + Node checks
 
-A minimal, framework-free probe of the core VisualQuakes bet: **run the full
-Okada (1985) kernel once per pixel in a WebGL2 fragment shader**, so dragging a
-slider is just a uniform update + one redraw.
+This folder holds the **CPU oracle and validation harness** behind the core
+VisualQuakes bet: run the full Okada (1985) kernel once per pixel in a WebGL2
+fragment shader, so dragging a slider is just a uniform update + one redraw.
+
+The interactive, in-browser benchmark that used to live here
+(`okada-bench.html`) grew up and moved to **[`../benchmark.html`](../benchmark.html)**
+— it ships with the site, is linked from the app's About panel, and lets anyone
+time the GPU shader against the JS float64 CPU port on their own machine (with
+configurable grid sizes, timing frames, and CPU baseline), plus run the
+GPU-vs-Python accuracy check.
 
 ## Why "nonlinear" doesn't hurt the GPU
 
@@ -18,42 +25,15 @@ whether the math is linear. Okada is:
 
 So "nonlinear" just means each thread does a fixed chunk of FLOPs — the GPU's
 best case. The real questions are fp32 precision near the fault and whether
-you're compute- vs overhead-bound, which the benchmark answers on your hardware.
-
-## Run it
-
-ES modules and `reference.json` need HTTP (not `file://`):
-
-```bash
-cd web/bench
-python -m http.server 8000
-# open http://localhost:8000/okada-bench.html
-```
-
-- **Drag the sliders** — fringes redraw in realtime from updated uniforms.
-- **Run benchmark** — GPU compute-pass ms/frame (and fps) at 256²–2048²,
-  vs the JS float64 CPU port at 256²/512².
-- **Validate GPU vs Python reference** — renders LOS on the reference grid,
-  reads it back, and reports max fp32 error against the float64 oracle.
-
-## Result so far
-
-On real GPU hardware the **Validate** button reports fp32 vs float64 LOS error
-of **~0.003% of the signal peak** (sub-millimeter) for the canonical scenario —
-so plain `highp` fp32 is sufficient; no double-precision emulation needed.
-
-GPU frame timing uses `EXT_disjoint_timer_query` for true GPU time-elapsed (the
-header shows whether it is available). If your first run showed implausibly fast,
-non-monotonic numbers, that was a single-end-of-loop sync measuring CPU dispatch
-instead of GPU execution — now fixed; re-run for honest per-frame GPU time.
+you're compute- vs overhead-bound, which `../benchmark.html` answers on your
+hardware.
 
 ## Files
 
 | File | Role |
 |------|------|
-| `../okada-shader.js` | GLSL ES 3.00 port of `displacement` / `tilt` / `strain` + LOS + colormaps (shared with the app) |
+| `../okada-shader.js` | GLSL ES 3.00 port of `displacement` / `tilt` / `strain` + LOS + colormaps (shared by the app and the benchmark page) |
 | `okada85.mjs` | float64 JS port of `displacement` / `tilt` / `strain` (CPU baseline **and** correctness oracle) |
-| `okada-bench.html` | WebGL2 harness: live view, benchmark, validation |
 | `gen_reference.py` | writes `reference.json` from the Python float64 engine |
 | `reference.json` | ground-truth fixture (params + displacement, LOS, tilt, strain on a grid) |
 | `validate.mjs` | Node: JS port vs Python reference (displacement, tilt, strain) |
@@ -68,10 +48,22 @@ node web/bench/check-shader-algo.mjs  # shader algebra (float64) vs Python
 ```
 
 Both pass to float64 round-off (~1e-19 km for displacement, ~4e-20 for tilt and
-strain), so the shader's math is correct by construction. The browser
-**Validate** button adds the only device-dependent piece: fp32 vs float64 on
+strain), so the shader's math is correct by construction. The **accuracy check**
+on `../benchmark.html` adds the only device-dependent piece: fp32 vs float64 on
 your GPU (the displacement/LOS path; tilt and strain share the same kernel
-family and fp32 behavior).
+family and fp32 behavior). On real GPU hardware it reports LOS error of
+**~0.003% of the signal peak** (sub-millimeter) — plain `highp` fp32 is
+sufficient; no double-precision emulation needed.
+
+## Run the browser benchmark locally
+
+ES modules and `reference.json` need HTTP (not `file://`):
+
+```bash
+cd web
+python -m http.server 8000
+# open http://localhost:8000/benchmark.html
+```
 
 ## Regenerate the fixture
 
